@@ -1,0 +1,269 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect, useCallback } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { 
+  MapPin, 
+  Plus, 
+  Link as LinkIcon, 
+  Trash2, 
+  Save, 
+  Navigation, 
+  Layers, 
+  Settings, 
+  Info, 
+  Maximize2, 
+  CheckCircle2, 
+  X,
+  Target,
+  Activity,
+  RefreshCw
+} from 'lucide-react';
+import MapView from './components/Map/MapView';
+import PrecisionRecorder from './components/Recorder/PrecisionRecorder';
+import { Point, Connection, AppMode, Parcel } from './types';
+import { cn } from './utils';
+
+export default function App() {
+  const [points, setPoints] = useState<Point[]>([]);
+  const [connections, setConnections] = useState<Connection[]>([]);
+  const [mode, setMode] = useState<AppMode>('VIEW');
+  const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number; accuracy?: number }>();
+  const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
+  const [showRecorder, setShowRecorder] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+
+  // Load from local storage on mount
+  useEffect(() => {
+    const savedPoints = localStorage.getItem('marzban_points');
+    const savedConnections = localStorage.getItem('marzban_connections');
+    if (savedPoints) setPoints(JSON.parse(savedPoints));
+    if (savedConnections) setConnections(JSON.parse(savedConnections));
+  }, []);
+
+  // Save to local storage on change
+  useEffect(() => {
+    localStorage.setItem('marzban_points', JSON.stringify(points));
+    localStorage.setItem('marzban_connections', JSON.stringify(connections));
+  }, [points, connections]);
+
+  const handleRecorderConfirm = (data: Omit<Point, 'id' | 'timestamp'>) => {
+    if (isUpdating && selectedPointId) {
+      setPoints(prev => prev.map(p => p.id === selectedPointId ? {
+        ...p,
+        ...data,
+        timestamp: Date.now()
+      } : p));
+      setIsUpdating(false);
+    } else {
+      const newPoint: Point = {
+        id: Math.random().toString(36).substr(2, 9),
+        ...data,
+        timestamp: Date.now()
+      };
+      setPoints(prev => [...prev, newPoint]);
+      setSelectedPointId(newPoint.id);
+    }
+    setShowRecorder(false);
+  };
+
+  const handlePointClick = (point: Point) => {
+    if (mode === 'CONNECT') {
+      if (selectedPointId && selectedPointId !== point.id) {
+        // Check if connection already exists
+        const exists = connections.some(c => 
+          (c.fromId === selectedPointId && c.toId === point.id) ||
+          (c.fromId === point.id && c.toId === selectedPointId)
+        );
+        
+        if (!exists) {
+          const newConn: Connection = {
+            id: Math.random().toString(36).substr(2, 9),
+            fromId: selectedPointId,
+            toId: point.id
+          };
+          setConnections(prev => [...prev, newConn]);
+        }
+        setSelectedPointId(point.id);
+      } else {
+        setSelectedPointId(point.id);
+      }
+    } else {
+      setSelectedPointId(point.id);
+    }
+  };
+
+  const deletePoint = (id: string) => {
+    if (confirm("آیا از حذف این مختصات اطمینان دارید؟")) {
+      setPoints(prev => prev.filter(p => p.id !== id));
+      setConnections(prev => prev.filter(c => c.fromId !== id && c.toId !== id));
+      setSelectedPointId(null);
+    }
+  };
+
+  const startUpdate = () => {
+    setIsUpdating(true);
+    setShowRecorder(true);
+  };
+
+  const selectedPoint = points.find(p => p.id === selectedPointId);
+
+  return (
+    <div className="flex flex-col h-screen w-full bg-slate-50 overflow-hidden font-sans" dir="rtl">
+      {/* Header */}
+      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between shadow-sm z-10">
+        <div className="flex items-center gap-2">
+          <div className="bg-emerald-600 p-2 rounded-lg shadow-emerald-200 shadow-lg">
+            <Layers className="text-white w-5 h-5" />
+          </div>
+          <div>
+            <h1 className="font-bold text-slate-900 text-lg leading-tight">مرزبان</h1>
+            <p className="text-xs text-slate-500">سیستم نقشه‌برداری اراضی</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+           <button className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
+             <Settings className="w-5 h-5" />
+           </button>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 relative">
+        <MapView 
+          points={points}
+          connections={connections}
+          mode={mode}
+          onPointClick={handlePointClick}
+          onMapClick={() => setSelectedPointId(null)}
+          currentLocation={currentLocation}
+          selectedPointId={selectedPointId}
+        />
+
+        {/* Floating Controls */}
+        <div className="absolute top-4 right-4 flex flex-col gap-2 z-[1000]">
+          <button 
+            onClick={() => setMode('VIEW')}
+            className={cn(
+              "p-3 rounded-2xl shadow-xl transition-all",
+              mode === 'VIEW' ? "bg-emerald-600 text-white" : "bg-white text-slate-600"
+            )}
+            title="حالت مشاهده"
+          >
+            <Navigation className="w-6 h-6" />
+          </button>
+          <button 
+            onClick={() => setMode('CONNECT')}
+            className={cn(
+              "p-3 rounded-2xl shadow-xl transition-all",
+              mode === 'CONNECT' ? "bg-emerald-600 text-white" : "bg-white text-slate-600"
+            )}
+            title="حالت اتصال مرزها"
+          >
+            <LinkIcon className="w-6 h-6" />
+          </button>
+        </div>
+
+        {/* Bottom Action Bar */}
+        <div className="absolute bottom-8 left-0 right-0 flex justify-center px-4 z-[1000]">
+          <div className="bg-white/90 backdrop-blur-md border border-white/20 p-2 rounded-3xl shadow-2xl flex items-center gap-2 max-w-md w-full">
+            <button 
+              onClick={() => { setIsUpdating(false); setShowRecorder(true); }}
+              className="flex-1 flex items-center justify-center gap-2 py-4 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg shadow-emerald-200 transition-all active:scale-95"
+            >
+              <Target className="w-5 h-5" />
+              ثبت مختصات دقیق
+            </button>
+            
+            <div className="w-px h-8 bg-slate-200 mx-1" />
+            
+            <button 
+              className="p-4 text-slate-600 hover:bg-slate-100 rounded-2xl transition-colors"
+              title="اطلاعات پروژه"
+            >
+              <Info className="w-6 h-6" />
+            </button>
+          </div>
+        </div>
+
+        {/* Selected Point Info Panel */}
+        <AnimatePresence>
+          {selectedPoint && (
+            <motion.div 
+              initial={{ y: 100, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 100, opacity: 0 }}
+              className="absolute bottom-32 left-4 right-4 bg-white rounded-3xl shadow-2xl p-5 z-[1000] border border-slate-100"
+            >
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-3">
+                  <div className="bg-emerald-100 p-2.5 rounded-2xl">
+                    <MapPin className="text-emerald-600 w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-lg">مختصات ثبت شده</h3>
+                    <p className="text-xs font-mono text-slate-500">
+                      {selectedPoint.lat.toFixed(8)}, {selectedPoint.lng.toFixed(8)}
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setSelectedPointId(null)}
+                  className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                >
+                  <X className="w-5 h-5 text-slate-400" />
+                </button>
+              </div>
+
+              <div className="bg-slate-50 rounded-2xl p-3 mb-5 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-emerald-500" />
+                  <span className="text-xs text-slate-600 font-medium">دقت ثبت: {selectedPoint.accuracy.toFixed(2)} متر</span>
+                </div>
+                <span className="text-[10px] text-slate-400">{new Date(selectedPoint.timestamp).toLocaleString('fa-IR')}</span>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-3">
+                <button 
+                  onClick={() => deletePoint(selectedPoint.id)}
+                  className="flex items-center justify-center gap-2 py-4 bg-rose-50 text-rose-600 rounded-2xl font-bold hover:bg-rose-100 transition-colors"
+                >
+                  <Trash2 className="w-5 h-5" />
+                  حذف
+                </button>
+                <button 
+                  onClick={startUpdate}
+                  className="flex items-center justify-center gap-2 py-4 bg-amber-50 text-amber-600 rounded-2xl font-bold hover:bg-amber-100 transition-colors"
+                >
+                  <RefreshCw className="w-5 h-5" />
+                  بروزرسانی
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Precision Recorder Overlay */}
+        <AnimatePresence>
+          {showRecorder && (
+            <PrecisionRecorder 
+              onConfirm={handleRecorderConfirm}
+              onCancel={() => { setShowRecorder(false); setIsUpdating(false); }}
+            />
+          )}
+        </AnimatePresence>
+      </main>
+
+      {/* Mode Indicator */}
+      {mode !== 'VIEW' && (
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 bg-amber-500 text-white px-5 py-2 rounded-full text-sm font-bold shadow-xl z-[1000] flex items-center gap-2 border border-white/20">
+          <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+          {mode === 'CONNECT' ? "حالت اتصال مرزها فعال است" : "حالت ویرایش"}
+        </div>
+      )}
+    </div>
+  );
+}
