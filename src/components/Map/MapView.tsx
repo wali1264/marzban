@@ -22,18 +22,39 @@ interface MapViewProps {
   mode: AppMode;
   onPointClick: (point: Point) => void;
   onMapClick: (lat: number, lng: number) => void;
+  onConnectionClick: (connectionId: string) => void;
   userLocation?: { lat: number; lng: number; accuracy: number };
+  showUserLocation: boolean;
   selectedPointId: string | null;
   centerTrigger?: number; // Used to trigger centering
 }
 
-function MapController({ centerOn }: { centerOn?: { lat: number; lng: number } }) {
+function MapController({ 
+  centerOn, 
+  points 
+}: { 
+  centerOn?: { lat: number; lng: number }; 
+  points: Point[] 
+}) {
   const map = useMap();
+  const [hasInitialFit, setHasInitialFit] = useState(false);
+
+  // Initial fit to points
+  useEffect(() => {
+    if (!hasInitialFit && points.length > 0) {
+      const bounds = L.latLngBounds(points.map(p => [p.lat, p.lng]));
+      map.fitBounds(bounds, { padding: [50, 50] });
+      setHasInitialFit(true);
+    }
+  }, [points, map, hasInitialFit]);
+
+  // Manual center on user
   useEffect(() => {
     if (centerOn) {
       map.flyTo([centerOn.lat, centerOn.lng], 18);
     }
   }, [centerOn, map]);
+
   return null;
 }
 
@@ -52,7 +73,9 @@ export default function MapView({
   mode, 
   onPointClick, 
   onMapClick,
+  onConnectionClick,
   userLocation,
+  showUserLocation,
   selectedPointId,
   centerTrigger
 }: MapViewProps) {
@@ -67,8 +90,14 @@ export default function MapView({
             key={conn.id} 
             positions={[[from.lat, from.lng], [to.lat, to.lng]]} 
             color="#10b981" 
-            weight={3}
-            opacity={0.8}
+            weight={6}
+            opacity={0.6}
+            eventHandlers={{
+              click: (e) => {
+                L.DomEvent.stopPropagation(e);
+                onConnectionClick(conn.id);
+              }
+            }}
           />
         );
       }
@@ -90,29 +119,24 @@ export default function MapView({
         />
         
         <MapEvents onMapClick={onMapClick} />
-        <MapController centerOn={centerTrigger ? (userLocation || undefined) : undefined} />
+        <MapController 
+          centerOn={centerTrigger ? (userLocation || undefined) : undefined} 
+          points={points}
+        />
         
-        {/* Live User Location */}
-        {userLocation && (
-          <>
-            <Circle 
-              center={[userLocation.lat, userLocation.lng]} 
-              radius={userLocation.accuracy}
-              pathOptions={{ color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.15, weight: 1 }}
-            />
-            <Marker 
-              position={[userLocation.lat, userLocation.lng]}
-              icon={L.divIcon({
-                className: 'user-location-icon',
-                html: `<div class="relative flex items-center justify-center">
-                  <div class="absolute w-10 h-10 bg-blue-500/20 rounded-full animate-ping"></div>
-                  <div class="w-4 h-4 bg-blue-600 rounded-full border-2 border-white shadow-lg"></div>
-                </div>`,
-                iconSize: [40, 40],
-                iconAnchor: [20, 20]
-              })}
-            />
-          </>
+        {/* Live User Location - Only shown if toggled ON */}
+        {showUserLocation && userLocation && (
+          <Marker 
+            position={[userLocation.lat, userLocation.lng]}
+            icon={L.divIcon({
+              className: 'user-location-icon',
+              html: `<div class="relative flex items-center justify-center">
+                <div class="w-3 h-3 bg-blue-600 rounded-full border-2 border-white shadow-lg"></div>
+              </div>`,
+              iconSize: [20, 20],
+              iconAnchor: [10, 10]
+            })}
+          />
         )}
 
         {points.map(point => {
@@ -122,7 +146,10 @@ export default function MapView({
               key={point.id} 
               position={[point.lat, point.lng]}
               eventHandlers={{
-                click: () => onPointClick(point),
+                click: (e) => {
+                  L.DomEvent.stopPropagation(e);
+                  onPointClick(point);
+                },
               }}
               icon={L.divIcon({
                 className: 'custom-div-icon',

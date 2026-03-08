@@ -21,7 +21,9 @@ import {
   Target,
   Activity,
   RefreshCw,
-  Crosshair
+  Crosshair,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import MapView from './components/Map/MapView';
 import PrecisionRecorder from './components/Recorder/PrecisionRecorder';
@@ -37,6 +39,7 @@ export default function App() {
   const [showRecorder, setShowRecorder] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [centerTrigger, setCenterTrigger] = useState(0);
+  const [showUserLocation, setShowUserLocation] = useState(false);
 
   // Load from local storage on mount
   useEffect(() => {
@@ -58,18 +61,13 @@ export default function App() {
           accuracy: pos.coords.accuracy
         };
         setUserLocation(loc);
-        
-        // Auto-zoom on first location fix
-        if (centerTrigger === 0) {
-          setCenterTrigger(prev => prev + 1);
-        }
       },
       (err) => console.error(err),
       { enableHighAccuracy: true }
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [centerTrigger]);
+  }, []);
 
   // Save to local storage on change
   useEffect(() => {
@@ -100,7 +98,7 @@ export default function App() {
   const handlePointClick = (point: Point) => {
     if (mode === 'CONNECT') {
       if (selectedPointId && selectedPointId !== point.id) {
-        // Check if connection already exists
+        // Create connection from selected to clicked
         const exists = connections.some(c => 
           (c.fromId === selectedPointId && c.toId === point.id) ||
           (c.fromId === point.id && c.toId === selectedPointId)
@@ -114,6 +112,7 @@ export default function App() {
           };
           setConnections(prev => [...prev, newConn]);
         }
+        // Chain: update selection to the new point
         setSelectedPointId(point.id);
       } else {
         setSelectedPointId(point.id);
@@ -123,10 +122,42 @@ export default function App() {
     }
   };
 
+  const handleConnectionClick = (connId: string) => {
+    if (confirm("آیا از حذف این اتصال اطمینان دارید؟")) {
+      setConnections(prev => prev.filter(c => c.id !== connId));
+    }
+  };
+
   const deletePoint = (id: string) => {
     if (confirm("آیا از حذف این مختصات اطمینان دارید؟")) {
+      // Find connections to this point
+      const connectedConns = connections.filter(c => c.fromId === id || c.toId === id);
+      
+      // If point has exactly 2 connections, we can "bypass" it
+      if (connectedConns.length === 2) {
+        const neighborIds = connectedConns.map(c => c.fromId === id ? c.toId : c.fromId);
+        const [n1, n2] = neighborIds;
+        
+        // Check if neighbors are already connected
+        const neighborsConnected = connections.some(c => 
+          (c.fromId === n1 && c.toId === n2) || (c.fromId === n2 && c.toId === n1)
+        );
+
+        if (!neighborsConnected) {
+          const bypassConn: Connection = {
+            id: Math.random().toString(36).substr(2, 9),
+            fromId: n1,
+            toId: n2
+          };
+          setConnections(prev => [...prev.filter(c => c.fromId !== id && c.toId !== id), bypassConn]);
+        } else {
+          setConnections(prev => prev.filter(c => c.fromId !== id && c.toId !== id));
+        }
+      } else {
+        setConnections(prev => prev.filter(c => c.fromId !== id && c.toId !== id));
+      }
+
       setPoints(prev => prev.filter(p => p.id !== id));
-      setConnections(prev => prev.filter(c => c.fromId !== id && c.toId !== id));
       setSelectedPointId(null);
     }
   };
@@ -166,7 +197,9 @@ export default function App() {
           mode={mode}
           onPointClick={handlePointClick}
           onMapClick={() => setSelectedPointId(null)}
+          onConnectionClick={handleConnectionClick}
           userLocation={userLocation}
+          showUserLocation={showUserLocation}
           selectedPointId={selectedPointId}
           centerTrigger={centerTrigger}
         />
@@ -193,8 +226,25 @@ export default function App() {
           >
             <LinkIcon className="w-6 h-6" />
           </button>
+          
+          <div className="h-px bg-slate-200 my-1" />
+
           <button 
-            onClick={() => setCenterTrigger(prev => prev + 1)}
+            onClick={() => setShowUserLocation(!showUserLocation)}
+            className={cn(
+              "p-3 rounded-2xl shadow-xl transition-all",
+              showUserLocation ? "bg-blue-600 text-white" : "bg-white text-slate-600"
+            )}
+            title={showUserLocation ? "مخفی‌سازی مکان من" : "نمایش مکان من"}
+          >
+            {showUserLocation ? <Eye className="w-6 h-6" /> : <EyeOff className="w-6 h-6" />}
+          </button>
+
+          <button 
+            onClick={() => {
+              setShowUserLocation(true);
+              setCenterTrigger(prev => prev + 1);
+            }}
             className="p-3 bg-white text-blue-600 rounded-2xl shadow-xl transition-all hover:bg-blue-50 active:scale-95"
             title="موقعیت من"
           >
@@ -226,7 +276,7 @@ export default function App() {
 
         {/* Selected Point Info Panel */}
         <AnimatePresence>
-          {selectedPoint && (
+          {selectedPoint && mode !== 'CONNECT' && (
             <motion.div 
               initial={{ y: 100, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
@@ -296,7 +346,7 @@ export default function App() {
       {mode !== 'VIEW' && (
         <div className="absolute top-20 left-1/2 -translate-x-1/2 bg-amber-500 text-white px-5 py-2 rounded-full text-sm font-bold shadow-xl z-[1000] flex items-center gap-2 border border-white/20">
           <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
-          {mode === 'CONNECT' ? "حالت اتصال مرزها فعال است" : "حالت ویرایش"}
+          {mode === 'CONNECT' ? "حالت اتصال زنجیره‌ای فعال است" : "حالت ویرایش"}
         </div>
       )}
     </div>
