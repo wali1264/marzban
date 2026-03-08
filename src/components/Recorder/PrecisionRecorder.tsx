@@ -19,9 +19,9 @@ interface PrecisionRecorderProps {
   duration?: number; // in seconds
 }
 
-export default function PrecisionRecorder({ onConfirm, onCancel, duration = 10 }: PrecisionRecorderProps) {
+export default function PrecisionRecorder({ onConfirm, onCancel }: PrecisionRecorderProps) {
   const [isProcessing, setIsProcessing] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [readings, setReadings] = useState<{ lat: number; lng: number; accuracy: number }[]>([]);
   const [currentReading, setCurrentReading] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -36,12 +36,11 @@ export default function PrecisionRecorder({ onConfirm, onCancel, duration = 10 }
     }
 
     setIsProcessing(true);
-    setProgress(0);
+    setElapsedSeconds(0);
     setReadings([]);
     setError(null);
 
     const startTime = Date.now();
-    const totalMs = duration * 1000;
 
     // Start watching position
     watchIdRef.current = navigator.geolocation.watchPosition(
@@ -62,17 +61,11 @@ export default function PrecisionRecorder({ onConfirm, onCancel, duration = 10 }
       { enableHighAccuracy: true }
     );
 
-    // Progress timer
+    // Elapsed timer
     timerRef.current = setInterval(() => {
-      const elapsed = Date.now() - startTime;
-      const p = Math.min((elapsed / totalMs) * 100, 100);
-      setProgress(p);
-
-      if (p >= 100) {
-        stopObservation();
-      }
-    }, 100);
-  }, [duration]);
+      setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+  }, []);
 
   const stopObservation = () => {
     setIsProcessing(false);
@@ -85,21 +78,51 @@ export default function PrecisionRecorder({ onConfirm, onCancel, duration = 10 }
     return () => stopObservation();
   }, []);
 
-  const getBestReading = () => {
+  const getWeightedAverage = () => {
     if (readings.length === 0) return currentReading;
-    // Simple logic: return the reading with best accuracy
-    return readings.reduce((prev, curr) => prev.accuracy < curr.accuracy ? prev : curr);
+    
+    // Weighted average based on accuracy (lower accuracy = higher weight)
+    let totalWeight = 0;
+    let weightedLat = 0;
+    let weightedLng = 0;
+    let minAccuracy = Infinity;
+
+    readings.forEach(r => {
+      const weight = 1 / (r.accuracy * r.accuracy); // Inverse square weight
+      totalWeight += weight;
+      weightedLat += r.lat * weight;
+      weightedLng += r.lng * weight;
+      if (r.accuracy < minAccuracy) minAccuracy = r.accuracy;
+    });
+
+    return {
+      lat: weightedLat / totalWeight,
+      lng: weightedLng / totalWeight,
+      accuracy: minAccuracy // We report the best accuracy achieved
+    };
   };
 
-  const bestReading = getBestReading();
-  const accuracyPercentage = bestReading ? Math.max(0, 100 - (bestReading.accuracy * 2)) : 0;
+  const bestReading = getWeightedAverage();
+  
+  // Improved confidence formula: 
+  // 3m or less = 100%
+  // 10m = 85%
+  // 20m = 65%
+  // 50m = 30%
+  const calculateConfidence = (acc: number) => {
+    if (acc <= 3) return 100;
+    if (acc >= 100) return 5;
+    return Math.max(5, 100 - (acc - 3) * 1.5);
+  };
+
+  const accuracyPercentage = bestReading ? calculateConfidence(bestReading.accuracy) : 0;
 
   return (
     <motion.div 
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[2000] bg-slate-900/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-white"
+      className="fixed inset-0 z-[2000] bg-slate-900/95 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-white"
       dir="rtl"
     >
       {/* Scope UI */}
@@ -123,37 +146,51 @@ export default function PrecisionRecorder({ onConfirm, onCancel, duration = 10 }
       {/* Data Display */}
       <div className="w-full max-w-sm space-y-6 text-center">
         <div>
-          <h2 className="text-2xl font-bold mb-1">پردازش مختصات دقیق</h2>
-          <p className="text-slate-400 text-sm">در حال میانگین‌گیری از سیگنال‌های دریافتی...</p>
+          <h2 className="text-2xl font-bold mb-1">تقویت دقت مختصات</h2>
+          <p className="text-slate-400 text-sm">سیستم در حال میانگین‌گیری وزنی از سیگنال‌هاست...</p>
         </div>
 
         <div className="bg-slate-800/50 rounded-3xl p-6 border border-slate-700">
+          <div className="flex justify-between items-center mb-6 px-2">
+            <div className="text-right">
+              <span className="text-[10px] text-slate-500 uppercase tracking-wider block">زمان سپری شده</span>
+              <span className="font-mono text-xl text-emerald-400">{elapsedSeconds} ثانیه</span>
+            </div>
+            <div className="text-left">
+              <span className="text-[10px] text-slate-500 uppercase tracking-wider block">تعداد نمونه‌ها</span>
+              <span className="font-mono text-xl text-emerald-400">{readings.length}</span>
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-4 mb-6">
             <div className="text-right">
-              <span className="text-xs text-slate-500 block mb-1">عرض جغرافیایی (Lat)</span>
-              <span className="font-mono text-lg">{currentReading?.lat.toFixed(8) || "---"}</span>
+              <span className="text-xs text-slate-500 block mb-1">عرض جغرافیایی</span>
+              <span className="font-mono text-base">{bestReading?.lat.toFixed(8) || "---"}</span>
             </div>
             <div className="text-right">
-              <span className="text-xs text-slate-500 block mb-1">طول جغرافیایی (Lng)</span>
-              <span className="font-mono text-lg">{currentReading?.lng.toFixed(8) || "---"}</span>
+              <span className="text-xs text-slate-500 block mb-1">طول جغرافیایی</span>
+              <span className="font-mono text-base">{bestReading?.lng.toFixed(8) || "---"}</span>
             </div>
           </div>
 
           <div className="space-y-2">
             <div className="flex justify-between text-xs mb-1">
-              <span className="text-slate-400">دقت تخمینی: {bestReading?.accuracy.toFixed(2) || "---"} متر</span>
+              <span className="text-slate-400">دقت فعلی: {bestReading?.accuracy.toFixed(2) || "---"} متر</span>
               <span className={cn(
                 "font-bold",
-                accuracyPercentage > 80 ? "text-emerald-400" : "text-amber-400"
+                accuracyPercentage > 85 ? "text-emerald-400" : accuracyPercentage > 60 ? "text-amber-400" : "text-rose-400"
               )}>
                 {accuracyPercentage.toFixed(0)}% اطمینان
               </span>
             </div>
             <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
               <motion.div 
-                className="h-full bg-emerald-500"
+                className={cn(
+                  "h-full transition-colors duration-500",
+                  accuracyPercentage > 85 ? "bg-emerald-500" : accuracyPercentage > 60 ? "bg-amber-500" : "bg-rose-500"
+                )}
                 initial={{ width: 0 }}
-                animate={{ width: `${progress}%` }}
+                animate={{ width: `${accuracyPercentage}%` }}
               />
             </div>
           </div>
@@ -176,19 +213,22 @@ export default function PrecisionRecorder({ onConfirm, onCancel, duration = 10 }
             انصراف
           </button>
           
-          {!isProcessing ? (
+          {isProcessing ? (
+            <button 
+              onClick={stopObservation}
+              className="flex items-center justify-center gap-2 py-4 bg-rose-600 hover:bg-rose-500 text-white rounded-2xl font-bold transition-all"
+            >
+              <Activity className="w-5 h-5" />
+              توقف و تحلیل
+            </button>
+          ) : (
             <button 
               onClick={startObservation}
               className="flex items-center justify-center gap-2 py-4 bg-amber-500 hover:bg-amber-600 text-white rounded-2xl font-bold transition-all"
             >
               <RefreshCw className="w-5 h-5" />
-              تلاش مجدد
+              شروع مجدد
             </button>
-          ) : (
-            <div className="flex items-center justify-center gap-2 py-4 bg-slate-800 text-slate-500 rounded-2xl font-bold cursor-not-allowed">
-              <Activity className="w-5 h-5 animate-pulse" />
-              در حال پردازش...
-            </div>
           )}
         </div>
 
@@ -200,6 +240,12 @@ export default function PrecisionRecorder({ onConfirm, onCancel, duration = 10 }
             <Check className="w-6 h-6" />
             تایید و ثبت نهایی مختصات
           </button>
+        )}
+        
+        {isProcessing && (
+          <p className="text-[10px] text-slate-500 italic">
+            نکته: هرچه بیشتر در این حالت بمانید، میانگین‌گیری دقیق‌تر خواهد بود.
+          </p>
         )}
       </div>
     </motion.div>

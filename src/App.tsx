@@ -20,7 +20,8 @@ import {
   X,
   Target,
   Activity,
-  RefreshCw
+  RefreshCw,
+  Crosshair
 } from 'lucide-react';
 import MapView from './components/Map/MapView';
 import PrecisionRecorder from './components/Recorder/PrecisionRecorder';
@@ -31,10 +32,11 @@ export default function App() {
   const [points, setPoints] = useState<Point[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [mode, setMode] = useState<AppMode>('VIEW');
-  const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number; accuracy?: number }>();
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number; accuracy: number }>();
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
   const [showRecorder, setShowRecorder] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [centerTrigger, setCenterTrigger] = useState(0);
 
   // Load from local storage on mount
   useEffect(() => {
@@ -43,6 +45,31 @@ export default function App() {
     if (savedPoints) setPoints(JSON.parse(savedPoints));
     if (savedConnections) setConnections(JSON.parse(savedConnections));
   }, []);
+
+  // Live Location Tracking
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const loc = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy
+        };
+        setUserLocation(loc);
+        
+        // Auto-zoom on first location fix
+        if (centerTrigger === 0) {
+          setCenterTrigger(prev => prev + 1);
+        }
+      },
+      (err) => console.error(err),
+      { enableHighAccuracy: true }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [centerTrigger]);
 
   // Save to local storage on change
   useEffect(() => {
@@ -139,8 +166,9 @@ export default function App() {
           mode={mode}
           onPointClick={handlePointClick}
           onMapClick={() => setSelectedPointId(null)}
-          currentLocation={currentLocation}
+          userLocation={userLocation}
           selectedPointId={selectedPointId}
+          centerTrigger={centerTrigger}
         />
 
         {/* Floating Controls */}
@@ -165,6 +193,13 @@ export default function App() {
           >
             <LinkIcon className="w-6 h-6" />
           </button>
+          <button 
+            onClick={() => setCenterTrigger(prev => prev + 1)}
+            className="p-3 bg-white text-blue-600 rounded-2xl shadow-xl transition-all hover:bg-blue-50 active:scale-95"
+            title="موقعیت من"
+          >
+            <Target className="w-6 h-6" />
+          </button>
         </div>
 
         {/* Bottom Action Bar */}
@@ -174,7 +209,7 @@ export default function App() {
               onClick={() => { setIsUpdating(false); setShowRecorder(true); }}
               className="flex-1 flex items-center justify-center gap-2 py-4 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg shadow-emerald-200 transition-all active:scale-95"
             >
-              <Target className="w-5 h-5" />
+              <Crosshair className="w-5 h-5" />
               ثبت مختصات دقیق
             </button>
             

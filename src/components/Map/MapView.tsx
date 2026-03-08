@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, useMapEvents, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Polyline, Circle, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { Point, Connection, AppMode } from '../../types';
-import { MapPin, Navigation } from 'lucide-react';
+import { MapPin, Navigation, Target } from 'lucide-react';
 
 // Fix for default marker icons in Leaflet with React
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
@@ -22,24 +22,19 @@ interface MapViewProps {
   mode: AppMode;
   onPointClick: (point: Point) => void;
   onMapClick: (lat: number, lng: number) => void;
-  currentLocation?: { lat: number; lng: number };
+  userLocation?: { lat: number; lng: number; accuracy: number };
   selectedPointId: string | null;
+  centerTrigger?: number; // Used to trigger centering
 }
 
-function LocationMarker({ location }: { location?: { lat: number; lng: number } }) {
+function MapController({ centerOn }: { centerOn?: { lat: number; lng: number } }) {
   const map = useMap();
-  
   useEffect(() => {
-    if (location) {
-      map.flyTo([location.lat, location.lng], map.getZoom());
+    if (centerOn) {
+      map.flyTo([centerOn.lat, centerOn.lng], 18);
     }
-  }, [location, map]);
-
-  return location ? (
-    <Marker position={[location.lat, location.lng]}>
-      <div className="bg-blue-500 w-4 h-4 rounded-full border-2 border-white shadow-lg animate-pulse" />
-    </Marker>
-  ) : null;
+  }, [centerOn, map]);
+  return null;
 }
 
 function MapEvents({ onMapClick }: { onMapClick: (lat: number, lng: number) => void }) {
@@ -57,8 +52,9 @@ export default function MapView({
   mode, 
   onPointClick, 
   onMapClick,
-  currentLocation,
-  selectedPointId
+  userLocation,
+  selectedPointId,
+  centerTrigger
 }: MapViewProps) {
   
   const renderConnections = () => {
@@ -94,7 +90,31 @@ export default function MapView({
         />
         
         <MapEvents onMapClick={onMapClick} />
+        <MapController centerOn={centerTrigger ? (userLocation || undefined) : undefined} />
         
+        {/* Live User Location */}
+        {userLocation && (
+          <>
+            <Circle 
+              center={[userLocation.lat, userLocation.lng]} 
+              radius={userLocation.accuracy}
+              pathOptions={{ color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.15, weight: 1 }}
+            />
+            <Marker 
+              position={[userLocation.lat, userLocation.lng]}
+              icon={L.divIcon({
+                className: 'user-location-icon',
+                html: `<div class="relative flex items-center justify-center">
+                  <div class="absolute w-10 h-10 bg-blue-500/20 rounded-full animate-ping"></div>
+                  <div class="w-4 h-4 bg-blue-600 rounded-full border-2 border-white shadow-lg"></div>
+                </div>`,
+                iconSize: [40, 40],
+                iconAnchor: [20, 20]
+              })}
+            />
+          </>
+        )}
+
         {points.map(point => {
           const isSelected = selectedPointId === point.id;
           return (
