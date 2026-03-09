@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, Circle, useMapEvents, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Polyline, Circle, Polygon, Tooltip, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { Point, Connection, AppMode } from '../../types';
 import { MapPin, Navigation, Target } from 'lucide-react';
@@ -29,47 +29,64 @@ interface MapViewProps {
   centerTrigger?: number; // Used to trigger centering
 }
 
-// Utility to calculate area in square meters using Shoelace formula on projected coordinates
-function calculateArea(points: Point[], connections: Connection[]): number {
-  if (points.length < 3) return 0;
-
-  // Simple approach: find a closed loop or just use points in order of connections
-  // For now, let's use the points that are part of any connection
-  const connectedPointIds = new Set<string>();
+// Find all simple cycles in the graph of connections
+function findCycles(points: Point[], connections: Connection[]): Point[][] {
+  const adj = new Map<string, string[]>();
   connections.forEach(c => {
-    connectedPointIds.add(c.fromId);
-    connectedPointIds.add(c.toId);
+    if (!adj.has(c.fromId)) adj.set(c.fromId, []);
+    if (!adj.has(c.toId)) adj.set(c.toId, []);
+    adj.get(c.fromId)!.push(c.toId);
+    adj.get(c.toId)!.push(c.fromId);
   });
 
-  if (connectedPointIds.size < 3) return 0;
+  const cycles: string[][] = [];
+  const visited = new Set<string>();
 
-  // To calculate area correctly, we need an ordered list of vertices.
-  // This is complex with arbitrary connections. 
-  // Let's assume the user connects them in order.
-  // We'll try to build a path.
-  const orderedPoints: Point[] = [];
-  if (connections.length > 0) {
-    let currentId = connections[0].fromId;
-    const visited = new Set<string>();
-    
-    while (currentId && !visited.has(currentId)) {
-      visited.add(currentId);
-      const p = points.find(pt => pt.id === currentId);
-      if (p) orderedPoints.push(p);
-      
-      const nextConn = connections.find(c => c.fromId === currentId && !visited.has(c.toId));
-      currentId = nextConn ? nextConn.toId : '';
+  const findCycleDFS = (u: string, p: string, path: string[]) => {
+    visited.add(u);
+    path.push(u);
+
+    const neighbors = adj.get(u) || [];
+    for (const v of neighbors) {
+      if (v === p) continue;
+      if (path.includes(v)) {
+        // Cycle found
+        const cycle = path.slice(path.indexOf(v));
+        if (cycle.length >= 3) {
+          // Check if this cycle is already found (simple check)
+          const sortedCycle = [...cycle].sort().join(',');
+          if (!cycles.some(c => [...c].sort().join(',') === sortedCycle)) {
+            cycles.push(cycle);
+          }
+        }
+      } else if (!visited.has(v)) {
+        findCycleDFS(v, u, [...path]);
+      }
     }
-  }
+  };
 
-  if (orderedPoints.length < 3) return 0;
+  const pointIds = Array.from(adj.keys());
+  pointIds.forEach(id => {
+    if (!visited.has(id)) {
+      findCycleDFS(id, '', []);
+    }
+  });
 
-  // Approximate area on sphere
-  const radius = 6378137; // Earth radius in meters
+  return cycles.map(cycleIds => 
+    cycleIds.map(id => points.find(p => p.id === id)!).filter(Boolean)
+  );
+}
+
+// Precise area calculation in square meters
+function calculatePolygonArea(nodes: Point[]): number {
+  if (nodes.length < 3) return 0;
+  
+  const radius = 6378137; // Earth radius
   let area = 0;
-  for (let i = 0; i < orderedPoints.length; i++) {
-    const p1 = orderedPoints[i];
-    const p2 = orderedPoints[(i + 1) % orderedPoints.length];
+  
+  for (let i = 0; i < nodes.length; i++) {
+    const p1 = nodes[i];
+    const p2 = nodes[(i + 1) % nodes.length];
     
     const lat1 = p1.lat * Math.PI / 180;
     const lon1 = p1.lng * Math.PI / 180;
@@ -80,6 +97,13 @@ function calculateArea(points: Point[], connections: Connection[]): number {
   }
   
   return Math.abs(area * radius * radius / 2.0);
+}
+
+// Calculate geometric center of points
+function getCentroid(nodes: Point[]): [number, number] {
+  const lat = nodes.reduce((sum, p) => sum + p.lat, 0) / nodes.length;
+  const lng = nodes.reduce((sum, p) => sum + p.lng, 0) / nodes.length;
+  return [lat, lng];
 }
 
 function MapController({ 
@@ -133,7 +157,7 @@ export default function MapView({
   centerTrigger
 }: MapViewProps) {
   
-  const area = calculateArea(points, connections);
+  const cycles = findCycles(points, connections);
 
   const renderConnections = () => {
     return connections.map(conn => {
@@ -157,6 +181,35 @@ export default function MapView({
         );
       }
       return null;
+    });
+  };
+
+  const renderPolygons = () => {
+    return cycles.map((cycle, idx) => {
+      const area = calculatePolygonArea(cycle);
+      const centroid = getCentroid(cycle);
+      return (
+        <Polygon 
+          key={`cycle-${idx}`}
+          positions={cycle.map(p => [p.lat, p.lng])}
+          pathOptions={{
+            color: '#10b981',
+            fillColor: '#10b981',
+            fillOpacity: 0.15,
+            weight: 0
+          }}
+        >
+          <Tooltip permanent direction="center" className="area-tooltip">
+            <div className="flex flex-col items-center bg-white/90 backdrop-blur-sm px-2 py-1 rounded-lg border border-emerald-200 shadow-sm" dir="rtl">
+              <span className="text-[10px] text-slate-500 font-bold">مساحت</span>
+              <div className="flex items-baseline gap-0.5">
+                <span className="text-sm font-mono font-bold text-emerald-700">{area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</span>
+                <span className="text-[8px] text-emerald-600 font-bold">متر مربع</span>
+              </div>
+            </div>
+          </Tooltip>
+        </Polygon>
+      );
     });
   };
 
@@ -223,19 +276,8 @@ export default function MapView({
         })}
 
         {renderConnections()}
+        {renderPolygons()}
       </MapContainer>
-
-      {/* Area Display Overlay */}
-      {area > 0 && (
-        <div className="absolute top-4 left-4 z-[1000] bg-white/90 backdrop-blur-md px-4 py-2 rounded-2xl shadow-xl border border-emerald-100 flex flex-col items-start" dir="rtl">
-          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">مساحت تقریبی</span>
-          <div className="flex items-baseline gap-1">
-            <span className="text-xl font-mono font-bold text-emerald-700">{area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</span>
-            <span className="text-xs text-emerald-600 font-bold">متر مربع</span>
-          </div>
-          <div className="text-[9px] text-slate-400 mt-1">بر اساس زنجیره اتصالات</div>
-        </div>
-      )}
     </div>
   );
 }
