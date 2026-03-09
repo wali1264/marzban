@@ -49,9 +49,15 @@ export default function App() {
     if (savedConnections) setConnections(JSON.parse(savedConnections));
   }, []);
 
-  // Live Location Tracking
+  const [hasZoomedForLocation, setHasZoomedForLocation] = useState(false);
+
+  // Live Location Tracking - Only active when showUserLocation is true
   useEffect(() => {
-    if (!navigator.geolocation) return;
+    if (!navigator.geolocation || !showUserLocation) {
+      setUserLocation(undefined);
+      setHasZoomedForLocation(false);
+      return;
+    }
 
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
@@ -67,7 +73,15 @@ export default function App() {
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, []);
+  }, [showUserLocation]);
+
+  // One-time zoom when turning on location and first fix is received
+  useEffect(() => {
+    if (showUserLocation && userLocation && !hasZoomedForLocation) {
+      setCenterTrigger(prev => prev + 1);
+      setHasZoomedForLocation(true);
+    }
+  }, [showUserLocation, userLocation, hasZoomedForLocation]);
 
   // Save to local storage on change
   useEffect(() => {

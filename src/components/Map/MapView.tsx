@@ -29,6 +29,59 @@ interface MapViewProps {
   centerTrigger?: number; // Used to trigger centering
 }
 
+// Utility to calculate area in square meters using Shoelace formula on projected coordinates
+function calculateArea(points: Point[], connections: Connection[]): number {
+  if (points.length < 3) return 0;
+
+  // Simple approach: find a closed loop or just use points in order of connections
+  // For now, let's use the points that are part of any connection
+  const connectedPointIds = new Set<string>();
+  connections.forEach(c => {
+    connectedPointIds.add(c.fromId);
+    connectedPointIds.add(c.toId);
+  });
+
+  if (connectedPointIds.size < 3) return 0;
+
+  // To calculate area correctly, we need an ordered list of vertices.
+  // This is complex with arbitrary connections. 
+  // Let's assume the user connects them in order.
+  // We'll try to build a path.
+  const orderedPoints: Point[] = [];
+  if (connections.length > 0) {
+    let currentId = connections[0].fromId;
+    const visited = new Set<string>();
+    
+    while (currentId && !visited.has(currentId)) {
+      visited.add(currentId);
+      const p = points.find(pt => pt.id === currentId);
+      if (p) orderedPoints.push(p);
+      
+      const nextConn = connections.find(c => c.fromId === currentId && !visited.has(c.toId));
+      currentId = nextConn ? nextConn.toId : '';
+    }
+  }
+
+  if (orderedPoints.length < 3) return 0;
+
+  // Approximate area on sphere
+  const radius = 6378137; // Earth radius in meters
+  let area = 0;
+  for (let i = 0; i < orderedPoints.length; i++) {
+    const p1 = orderedPoints[i];
+    const p2 = orderedPoints[(i + 1) % orderedPoints.length];
+    
+    const lat1 = p1.lat * Math.PI / 180;
+    const lon1 = p1.lng * Math.PI / 180;
+    const lat2 = p2.lat * Math.PI / 180;
+    const lon2 = p2.lng * Math.PI / 180;
+    
+    area += (lon2 - lon1) * (2 + Math.sin(lat1) + Math.sin(lat2));
+  }
+  
+  return Math.abs(area * radius * radius / 2.0);
+}
+
 function MapController({ 
   centerOn, 
   points 
@@ -39,7 +92,7 @@ function MapController({
   const map = useMap();
   const [hasInitialFit, setHasInitialFit] = useState(false);
 
-  // Initial fit to points
+  // Initial fit to points - only once
   useEffect(() => {
     if (!hasInitialFit && points.length > 0) {
       const bounds = L.latLngBounds(points.map(p => [p.lat, p.lng]));
@@ -48,10 +101,10 @@ function MapController({
     }
   }, [points, map, hasInitialFit]);
 
-  // Manual center on user
+  // Manual center on user - only when centerTrigger changes
   useEffect(() => {
     if (centerOn) {
-      map.flyTo([centerOn.lat, centerOn.lng], 18);
+      map.setView([centerOn.lat, centerOn.lng], map.getZoom() > 18 ? map.getZoom() : 18);
     }
   }, [centerOn, map]);
 
@@ -80,6 +133,8 @@ export default function MapView({
   centerTrigger
 }: MapViewProps) {
   
+  const area = calculateArea(points, connections);
+
   const renderConnections = () => {
     return connections.map(conn => {
       const from = points.find(p => p.id === conn.fromId);
@@ -110,12 +165,15 @@ export default function MapView({
       <MapContainer 
         center={[34.5553, 69.2075]} // Default to Kabul
         zoom={13} 
+        maxZoom={22}
         className="w-full h-full"
         zoomControl={false}
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          maxZoom={22}
+          maxNativeZoom={19}
         />
         
         <MapEvents onMapClick={onMapClick} />
@@ -166,6 +224,18 @@ export default function MapView({
 
         {renderConnections()}
       </MapContainer>
+
+      {/* Area Display Overlay */}
+      {area > 0 && (
+        <div className="absolute top-4 left-4 z-[1000] bg-white/90 backdrop-blur-md px-4 py-2 rounded-2xl shadow-xl border border-emerald-100 flex flex-col items-start" dir="rtl">
+          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">مساحت تقریبی</span>
+          <div className="flex items-baseline gap-1">
+            <span className="text-xl font-mono font-bold text-emerald-700">{area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</span>
+            <span className="text-xs text-emerald-600 font-bold">متر مربع</span>
+          </div>
+          <div className="text-[9px] text-slate-400 mt-1">بر اساس زنجیره اتصالات</div>
+        </div>
+      )}
     </div>
   );
 }
