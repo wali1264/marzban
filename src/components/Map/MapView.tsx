@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, Circle, Polygon, Tooltip, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { Point, Connection, AppMode } from '../../types';
-import { MapPin, Navigation, Target } from 'lucide-react';
+import { Point, Connection, AppMode, Parcel } from '../../types';
+import { MapPin, Navigation, Target, Users } from 'lucide-react';
 
 // Fix for default marker icons in Leaflet with React
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
@@ -23,10 +23,12 @@ interface MapViewProps {
   onPointClick: (point: Point) => void;
   onMapClick: (lat: number, lng: number) => void;
   onConnectionClick: (connectionId: string) => void;
+  onPolygonClick?: (points: Point[]) => void;
   userLocation?: { lat: number; lng: number; accuracy: number };
   showUserLocation: boolean;
   selectedPointId: string | null;
   centerTrigger?: number; // Used to trigger centering
+  parcels?: Parcel[];
 }
 
 // Find all simple cycles in the graph of connections
@@ -135,11 +137,14 @@ function MapController({
   return null;
 }
 
-function MapEvents({ onMapClick }: { onMapClick: (lat: number, lng: number) => void }) {
+function MapEvents({ onMapClick, onZoomEnd }: { onMapClick: (lat: number, lng: number) => void, onZoomEnd: (zoom: number) => void }) {
   useMapEvents({
     click(e) {
       onMapClick(e.latlng.lat, e.latlng.lng);
     },
+    zoomend(e) {
+      onZoomEnd(e.target.getZoom());
+    }
   });
   return null;
 }
@@ -151,13 +156,16 @@ export default function MapView({
   onPointClick, 
   onMapClick,
   onConnectionClick,
+  onPolygonClick,
   userLocation,
   showUserLocation,
   selectedPointId,
-  centerTrigger
+  centerTrigger,
+  parcels = []
 }: MapViewProps) {
   
   const cycles = findCycles(points, connections);
+  const [zoom, setZoom] = useState(13);
 
   const renderConnections = () => {
     return connections.map(conn => {
@@ -187,28 +195,72 @@ export default function MapView({
   const renderPolygons = () => {
     return cycles.map((cycle, idx) => {
       const area = calculatePolygonArea(cycle);
-      const centroid = getCentroid(cycle);
+      
+      // Responsive label logic
+      const isVisible = zoom > 15;
+      const scale = Math.max(0.5, Math.min(1, (zoom - 14) / 4));
+
       return (
-        <Polygon 
-          key={`cycle-${idx}`}
-          positions={cycle.map(p => [p.lat, p.lng])}
-          pathOptions={{
-            color: '#10b981',
-            fillColor: '#10b981',
-            fillOpacity: 0.15,
-            weight: 0
-          }}
-        >
-          <Tooltip permanent direction="center" className="area-tooltip">
-            <div className="flex flex-col items-center bg-white/90 backdrop-blur-sm px-2 py-1 rounded-lg border border-emerald-200 shadow-sm" dir="rtl">
-              <span className="text-[10px] text-slate-500 font-bold">مساحت</span>
-              <div className="flex items-baseline gap-0.5">
-                <span className="text-sm font-mono font-bold text-emerald-700">{area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</span>
-                <span className="text-[8px] text-emerald-600 font-bold">متر مربع</span>
-              </div>
-            </div>
-          </Tooltip>
-        </Polygon>
+        <React.Fragment key={`cycle-group-${idx}`}>
+          <Polygon 
+            positions={cycle.map(p => [p.lat, p.lng])}
+            pathOptions={{
+              color: '#10b981',
+              fillColor: '#10b981',
+              fillOpacity: 0.1,
+              weight: 0
+            }}
+            eventHandlers={{
+              click: (e) => {
+                if (mode === 'DIVIDE' && onPolygonClick) {
+                  L.DomEvent.stopPropagation(e);
+                  onPolygonClick(cycle);
+                }
+              }
+            }}
+          >
+            {isVisible && (
+              <Tooltip permanent direction="center" className="area-tooltip">
+                <div 
+                  className="flex flex-col items-center bg-white/90 backdrop-blur-sm px-2 py-1 rounded-lg border border-emerald-200 shadow-sm transition-all duration-300" 
+                  dir="rtl"
+                  style={{ transform: `scale(${scale})`, opacity: isVisible ? 1 : 0 }}
+                >
+                  <span className="text-[10px] text-slate-500 font-bold">مساحت کل</span>
+                  <div className="flex items-baseline gap-0.5">
+                    <span className="text-sm font-mono font-bold text-emerald-700">{area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</span>
+                    <span className="text-[8px] text-emerald-600 font-bold">متر مربع</span>
+                  </div>
+                </div>
+              </Tooltip>
+            )}
+          </Polygon>
+
+          {/* Render Divisions if any */}
+          {parcels.find(p => {
+            const cycleIds = cycle.map(pt => pt.id).sort().join(',');
+            const parcelIds = p.pointIds.sort().join(',');
+            return cycleIds === parcelIds;
+          })?.divisions.map(div => (
+            <Polygon
+              key={div.id}
+              positions={div.geometry}
+              pathOptions={{
+                color: '#0ea5e9',
+                fillColor: '#0ea5e9',
+                fillOpacity: 0.2,
+                weight: 2,
+                dashArray: '5, 5'
+              }}
+            >
+               <Tooltip permanent direction="center">
+                <div className="bg-white/80 px-1 rounded text-[8px] font-bold text-blue-700">
+                  {div.percentage}%
+                </div>
+              </Tooltip>
+            </Polygon>
+          ))}
+        </React.Fragment>
       );
     });
   };
@@ -229,7 +281,7 @@ export default function MapView({
           maxNativeZoom={19}
         />
         
-        <MapEvents onMapClick={onMapClick} />
+        <MapEvents onMapClick={() => onMapClick(0, 0)} onZoomEnd={setZoom} />
         <MapController 
           centerOn={centerTrigger ? (userLocation || undefined) : undefined} 
           points={points}

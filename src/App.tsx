@@ -23,11 +23,15 @@ import {
   RefreshCw,
   Crosshair,
   Eye,
-  EyeOff
+  EyeOff,
+  Users,
+  Scissors,
+  RotateCw
 } from 'lucide-react';
+import * as turf from '@turf/turf';
 import MapView from './components/Map/MapView';
 import PrecisionRecorder from './components/Recorder/PrecisionRecorder';
-import { Point, Connection, AppMode, Parcel } from './types';
+import { Point, Connection, AppMode, Parcel, Partner, Division } from './types';
 import { cn } from './utils';
 
 export default function App() {
@@ -41,12 +45,18 @@ export default function App() {
   const [centerTrigger, setCenterTrigger] = useState(0);
   const [showUserLocation, setShowUserLocation] = useState(false);
 
+  const [parcels, setParcels] = useState<Parcel[]>([]);
+  const [showDivisionModal, setShowDivisionModal] = useState(false);
+  const [selectedCycle, setSelectedCycle] = useState<Point[] | null>(null);
+
   // Load from local storage on mount
   useEffect(() => {
     const savedPoints = localStorage.getItem('marzban_points');
     const savedConnections = localStorage.getItem('marzban_connections');
+    const savedParcels = localStorage.getItem('marzban_parcels');
     if (savedPoints) setPoints(JSON.parse(savedPoints));
     if (savedConnections) setConnections(JSON.parse(savedConnections));
+    if (savedParcels) setParcels(JSON.parse(savedParcels));
   }, []);
 
   const [hasZoomedForLocation, setHasZoomedForLocation] = useState(false);
@@ -87,7 +97,8 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('marzban_points', JSON.stringify(points));
     localStorage.setItem('marzban_connections', JSON.stringify(connections));
-  }, [points, connections]);
+    localStorage.setItem('marzban_parcels', JSON.stringify(parcels));
+  }, [points, connections, parcels]);
 
   const handleRecorderConfirm = (data: Omit<Point, 'id' | 'timestamp'>) => {
     if (isUpdating && selectedPointId) {
@@ -176,6 +187,116 @@ export default function App() {
     }
   };
 
+  const handlePolygonClick = (cycle: Point[]) => {
+    if (mode === 'DIVIDE') {
+      setSelectedCycle(cycle);
+      setShowDivisionModal(true);
+    }
+  };
+
+  const splitPolygon = (cycle: Point[], percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL'): [number, number][] => {
+    const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
+    const poly = turf.polygon([coords]);
+    const bbox = turf.bbox(poly);
+    const totalArea = turf.area(poly);
+    const targetArea = totalArea * (percentage / 100);
+
+    let min = orientation === 'VERTICAL' ? bbox[0] : bbox[1];
+    let max = orientation === 'VERTICAL' ? bbox[2] : bbox[3];
+    let bestCoords: [number, number][] = [];
+
+    // Binary search for the split line
+    for (let i = 0; i < 20; i++) {
+      const mid = (min + max) / 2;
+      let splitLine;
+      
+      if (orientation === 'VERTICAL') {
+        splitLine = turf.lineString([[mid, bbox[1] - 0.1], [mid, bbox[3] + 0.1]]);
+      } else {
+        splitLine = turf.lineString([[bbox[0] - 0.1, mid], [bbox[2] + 0.1, mid]]);
+      }
+
+      const polyLine = turf.polygonToLine(poly);
+      const split = turf.lineSplit(polyLine as any, splitLine);
+      if (split.features.length < 2) {
+        if (orientation === 'VERTICAL') min = mid; else min = mid;
+        continue;
+      }
+
+      // Create a clipping polygon
+      let clipPoly;
+      if (orientation === 'VERTICAL') {
+        clipPoly = turf.polygon([[[bbox[0], bbox[1]], [mid, bbox[1]], [mid, bbox[3]], [bbox[0], bbox[3]], [bbox[0], bbox[1]]]]);
+      } else {
+        clipPoly = turf.polygon([[[bbox[0], bbox[1]], [bbox[2], bbox[1]], [bbox[2], mid], [bbox[0], mid], [bbox[0], bbox[1]]]]);
+      }
+
+      const intersection = turf.intersect(turf.featureCollection([poly, clipPoly]));
+      if (!intersection) {
+        min = mid;
+        continue;
+      }
+
+      const currentArea = turf.area(intersection);
+      if (currentArea < targetArea) {
+        min = mid;
+      } else {
+        max = mid;
+      }
+
+      if (intersection.geometry.type === 'Polygon') {
+        bestCoords = intersection.geometry.coordinates[0] as [number, number][];
+      } else if (intersection.geometry.type === 'MultiPolygon') {
+        bestCoords = intersection.geometry.coordinates[0][0] as [number, number][];
+      }
+    }
+
+    // Convert back to [lat, lng] for Leaflet
+    return bestCoords.map(c => [c[1], c[0]] as [number, number]);
+  };
+
+  const handleAddDivision = (name: string, percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL') => {
+    if (!selectedCycle) return;
+
+    const parcelId = selectedCycle.map(p => p.id).sort().join(',');
+    const existingParcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+    
+    const currentTotal = existingParcel?.divisions.reduce((sum, d) => sum + d.percentage, 0) || 0;
+    if (currentTotal + percentage > 100) {
+      alert(`خطا: مجموع سهام نمی‌تواند بیش از ۱۰۰٪ باشد. (باقیمانده: ${100 - currentTotal}٪)`);
+      return;
+    }
+
+    const geometry = splitPolygon(selectedCycle, percentage + currentTotal, orientation);
+    // Note: This simple split logic needs refinement for multiple divisions, 
+    // but for now it demonstrates the concept.
+    
+    const newDivision: Division = {
+      id: Math.random().toString(36).substr(2, 9),
+      partnerId: name,
+      percentage,
+      geometry,
+      orientation
+    };
+
+    if (existingParcel) {
+      setParcels(prev => prev.map(p => p.id === existingParcel.id ? {
+        ...p,
+        divisions: [...p.divisions, newDivision]
+      } : p));
+    } else {
+      const newParcel: Parcel = {
+        id: Math.random().toString(36).substr(2, 9),
+        name: "قطعه جدید",
+        pointIds: selectedCycle.map(p => p.id),
+        divisions: [newDivision],
+        area: turf.area(turf.polygon([[...selectedCycle.map(p => [p.lng, p.lat]), [selectedCycle[0].lng, selectedCycle[0].lat]]]))
+      };
+      setParcels(prev => [...prev, newParcel]);
+    }
+    setShowDivisionModal(false);
+  };
+
   const startUpdate = () => {
     setIsUpdating(true);
     setShowRecorder(true);
@@ -197,6 +318,16 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+           <button 
+             onClick={() => setMode(mode === 'DIVIDE' ? 'VIEW' : 'DIVIDE')}
+             className={cn(
+               "p-2 rounded-full transition-colors",
+               mode === 'DIVIDE' ? "bg-blue-100 text-blue-600" : "text-slate-500 hover:bg-slate-100"
+             )}
+             title="حالت تقسیم اراضی"
+           >
+             <Users className="w-5 h-5" />
+           </button>
            <button className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
              <Settings className="w-5 h-5" />
            </button>
@@ -212,10 +343,12 @@ export default function App() {
           onPointClick={handlePointClick}
           onMapClick={() => setSelectedPointId(null)}
           onConnectionClick={handleConnectionClick}
+          onPolygonClick={handlePolygonClick}
           userLocation={userLocation}
           showUserLocation={showUserLocation}
           selectedPointId={selectedPointId}
           centerTrigger={centerTrigger}
+          parcels={parcels}
         />
 
         {/* Floating Controls */}
@@ -360,9 +493,99 @@ export default function App() {
       {mode !== 'VIEW' && (
         <div className="absolute top-20 left-1/2 -translate-x-1/2 bg-amber-500 text-white px-5 py-2 rounded-full text-sm font-bold shadow-xl z-[1000] flex items-center gap-2 border border-white/20">
           <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
-          {mode === 'CONNECT' ? "حالت اتصال زنجیره‌ای فعال است" : "حالت ویرایش"}
+          {mode === 'CONNECT' ? "حالت اتصال زنجیره‌ای فعال است" : 
+           mode === 'DIVIDE' ? "حالت تقسیم اراضی: روی یک قطعه کلیک کنید" : "حالت ویرایش"}
         </div>
       )}
+
+      {/* Division Modal */}
+      <AnimatePresence>
+        {showDivisionModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-4" dir="rtl">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-[32px] shadow-2xl w-full max-w-md overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="bg-blue-100 p-2 rounded-xl">
+                    <Scissors className="w-6 h-6 text-blue-600" />
+                  </div>
+                  <h2 className="text-xl font-bold text-slate-900">تقسیم سهم و شرکا</h2>
+                </div>
+                <button onClick={() => setShowDivisionModal(false)} className="p-2 hover:bg-slate-100 rounded-full">
+                  <X className="w-5 h-5 text-slate-400" />
+                </button>
+              </div>
+
+              <div className="p-6">
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  const formData = new FormData(e.currentTarget);
+                  handleAddDivision(
+                    formData.get('name') as string,
+                    Number(formData.get('percentage')),
+                    formData.get('orientation') as 'HORIZONTAL' | 'VERTICAL'
+                  );
+                }}>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-2">نام شریک / فرزند</label>
+                      <input 
+                        name="name"
+                        required
+                        className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-4 py-3 focus:border-blue-500 focus:outline-none transition-colors"
+                        placeholder="مثلاً: احمد (نسل دوم)"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-2">درصد سهم (٪)</label>
+                      <input 
+                        name="percentage"
+                        type="number"
+                        min="1"
+                        max="100"
+                        required
+                        className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-4 py-3 focus:border-blue-500 focus:outline-none transition-colors"
+                        placeholder="مثلاً: ۵۰"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-2">جهت تقسیم</label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <label className="relative flex items-center justify-center p-4 bg-slate-50 rounded-2xl border-2 border-transparent cursor-pointer has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50 transition-all">
+                          <input type="radio" name="orientation" value="VERTICAL" defaultChecked className="sr-only" />
+                          <div className="flex flex-col items-center gap-1">
+                            <div className="w-px h-4 bg-slate-400" />
+                            <span className="text-xs font-bold">عمودی</span>
+                          </div>
+                        </label>
+                        <label className="relative flex items-center justify-center p-4 bg-slate-50 rounded-2xl border-2 border-transparent cursor-pointer has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50 transition-all">
+                          <input type="radio" name="orientation" value="HORIZONTAL" className="sr-only" />
+                          <div className="flex flex-col items-center gap-1">
+                            <div className="h-px w-4 bg-slate-400" />
+                            <span className="text-xs font-bold">افقی</span>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button 
+                    type="submit"
+                    className="w-full mt-8 py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all active:scale-95 flex items-center justify-center gap-2"
+                  >
+                    <CheckCircle2 className="w-5 h-5" />
+                    تایید و ایجاد سهم
+                  </button>
+                </form>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
