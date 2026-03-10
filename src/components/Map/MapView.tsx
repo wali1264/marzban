@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, Circle, Polygon, Tooltip, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
+import * as turf from '@turf/turf';
 import { Point, Connection, AppMode, Parcel } from '../../types';
 import { MapPin, Navigation, Target, Users } from 'lucide-react';
 
@@ -31,6 +32,7 @@ interface MapViewProps {
   selectedPointId: string | null;
   centerTrigger?: number; // Used to trigger centering
   parcels?: Parcel[];
+  generationFilter?: number;
 }
 
 // Find all simple cycles in the graph of connections
@@ -165,12 +167,42 @@ export default function MapView({
   showUserLocation,
   selectedPointId,
   centerTrigger,
-  parcels = []
+  parcels = [],
+  generationFilter = 1
 }: MapViewProps) {
   
   const cycles = findCycles(points, connections);
   const [zoom, setZoom] = useState(13);
   const longPressTimer = React.useRef<NodeJS.Timeout | null>(null);
+
+  // Calculate generations for each cycle/parcel
+  const cyclesWithGen = useMemo(() => {
+    const polys = cycles.map(cycle => {
+      const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
+      return { cycle, poly: turf.polygon([coords as any]) };
+    });
+
+    return polys.map(item => {
+      let gen = 1;
+      // Check if this poly is inside any other poly
+      for (const other of polys) {
+        if (item === other) continue;
+        if (turf.booleanContains(other.poly, item.poly)) {
+          gen = 2;
+          // Check if the container is also inside something
+          for (const third of polys) {
+            if (third === other || third === item) continue;
+            if (turf.booleanContains(third.poly, other.poly)) {
+              gen = 3;
+              break;
+            }
+          }
+          if (gen === 2) break; // Found level 2, keep looking if it might be 3
+        }
+      }
+      return { ...item, gen };
+    });
+  }, [cycles]);
 
   const handleLongPressStart = (callback?: () => void) => {
     if (!callback) return;
@@ -221,46 +253,70 @@ export default function MapView({
   };
 
   const renderPolygons = () => {
-    return cycles.map((cycle, idx) => {
+    return cyclesWithGen.map((item, idx) => {
+      const { cycle, gen } = item;
       const area = calculatePolygonArea(cycle);
       
-      // Responsive label logic
+      const parcelId = cycle.map(p => p.id).sort().join(',');
+      const parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+
+      // Visibility logic based on generation filter
       const isVisible = zoom > 15;
       const scale = Math.max(0.5, Math.min(1, (zoom - 14) / 4));
+      
+      // Only show area and owner name if generation matches filter
+      const showDetails = gen === generationFilter;
 
       return (
         <React.Fragment key={`cycle-group-${idx}`}>
           <Polygon 
             positions={cycle.map(p => [p.lat, p.lng])}
             pathOptions={{
-              color: '#10b981',
-              fillColor: '#10b981',
-              fillOpacity: 0.1,
-              weight: 0
+              color: gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b',
+              fillColor: gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b',
+              fillOpacity: showDetails ? 0.1 : 0.02,
+              weight: showDetails ? 2 : 1,
+              dashArray: showDetails ? '' : '5, 10'
             }}
             eventHandlers={{
               click: (e) => {
-                if (mode === 'DIVIDE' && onPolygonClick) {
+                if ((mode === 'DIVIDE' || mode === 'MANAGE') && onPolygonClick) {
                   L.DomEvent.stopPropagation(e);
                   onPolygonClick(cycle);
                 }
               }
             }}
           >
-            {isVisible && (
-              <Tooltip permanent direction="center" className="area-tooltip">
-                <div 
-                  className="flex flex-col items-center bg-white/90 backdrop-blur-sm px-2 py-1 rounded-lg border border-emerald-200 shadow-sm transition-all duration-300" 
-                  dir="rtl"
-                  style={{ transform: `scale(${scale})`, opacity: isVisible ? 1 : 0 }}
-                >
-                  <span className="text-[10px] text-slate-500 font-bold">مساحت کل</span>
-                  <div className="flex items-baseline gap-0.5">
-                    <span className="text-sm font-mono font-bold text-emerald-700">{area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</span>
-                    <span className="text-[8px] text-emerald-600 font-bold">متر مربع</span>
+            {isVisible && showDetails && (
+              <>
+                <Tooltip permanent direction="center" className="area-tooltip">
+                  <div 
+                    className="flex flex-col items-center bg-white/90 backdrop-blur-sm px-2 py-1 rounded-lg border border-slate-200 shadow-sm transition-all duration-300 pointer-events-none" 
+                    dir="rtl"
+                    style={{ transform: `scale(${scale})`, opacity: isVisible ? 1 : 0 }}
+                  >
+                    <span className="text-[10px] text-slate-500 font-bold">مساحت قطعه</span>
+                    <div className="flex items-baseline gap-0.5">
+                      <span className="text-sm font-mono font-bold text-slate-700">{area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</span>
+                      <span className="text-[8px] text-slate-600 font-bold">متر مربع</span>
+                    </div>
                   </div>
-                </div>
-              </Tooltip>
+                </Tooltip>
+                
+                {parcel?.ownerName && (
+                  <Tooltip permanent direction="center" className="owner-watermark-tooltip">
+                    <div 
+                      className="text-slate-900/20 font-black whitespace-nowrap pointer-events-none select-none transition-all duration-500"
+                      style={{ 
+                        fontSize: `${Math.max(20, area / 500)}px`,
+                        transform: `rotate(-15deg)`
+                      }}
+                    >
+                      {parcel.ownerName}
+                    </div>
+                  </Tooltip>
+                )}
+              </>
             )}
           </Polygon>
 

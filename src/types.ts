@@ -39,6 +39,7 @@ export interface Parcel {
   pointIds: string[]; // Ordered points forming the boundary
   divisions: Division[];
   area: number; // in square meters
+  ownerName?: string;
 }
 
-export type AppMode = 'VIEW' | 'RECORD' | 'CONNECT' | 'EDIT' | 'DIVIDE';
+export type AppMode = 'VIEW' | 'RECORD' | 'CONNECT' | 'EDIT' | 'DIVIDE' | 'MANAGE';

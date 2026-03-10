@@ -26,7 +26,8 @@ import {
   EyeOff,
   Users,
   Scissors,
-  RotateCw
+  RotateCw,
+  UserCog
 } from 'lucide-react';
 import * as turf from '@turf/turf';
 import MapView from './components/Map/MapView';
@@ -54,6 +55,10 @@ export default function App() {
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
   const [showProjectInfo, setShowProjectInfo] = useState(false);
+  const [generationFilter, setGenerationFilter] = useState(1);
+  const [showOwnerModal, setShowOwnerModal] = useState(false);
+  const [selectedParcelForOwner, setSelectedParcelForOwner] = useState<Parcel | null>(null);
+  const [ownerNameInput, setOwnerNameInput] = useState('');
 
   const [pendingDeleteConnId, setPendingDeleteConnId] = useState<string | null>(null);
   const [pendingDivisionAction, setPendingDivisionAction] = useState<{ parcelId: string, divId: string, type: 'DELETE' | 'EDIT' } | null>(null);
@@ -201,6 +206,14 @@ export default function App() {
     if (mode === 'DIVIDE') {
       setSelectedCycle(cycle);
       setShowDivisionModal(true);
+    } else if (mode === 'MANAGE') {
+      const parcelId = cycle.map(p => p.id).sort().join(',');
+      const parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+      if (parcel) {
+        setSelectedParcelForOwner(parcel);
+        setOwnerNameInput(parcel.ownerName || '');
+        setShowOwnerModal(true);
+      }
     }
   };
 
@@ -428,19 +441,20 @@ export default function App() {
     }
   };
 
+  const handleUpdateOwner = () => {
+    if (selectedParcelForOwner) {
+      setParcels(prev => prev.map(p => 
+        p.id === selectedParcelForOwner.id ? { ...p, ownerName: ownerNameInput } : p
+      ));
+      setShowOwnerModal(false);
+      setSelectedParcelForOwner(null);
+      setOwnerNameInput('');
+    }
+  };
+
   const startUpdate = () => {
     setIsUpdating(true);
     setShowRecorder(true);
-  };
-
-  const clearAll = () => {
-    if (confirm("آیا از حذف تمامی داده‌ها اطمینان دارید؟ این عمل غیرقابل بازگشت است.")) {
-      setPoints([]);
-      setConnections([]);
-      setParcels([]);
-      setSelectedPointId(null);
-      localStorage.clear();
-    }
   };
 
   const selectedPoint = points.find(p => p.id === selectedPointId);
@@ -459,13 +473,31 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+           <div className="flex bg-slate-100 p-1 rounded-2xl gap-1">
+             {[1, 2, 3].map(gen => (
+               <button
+                 key={gen}
+                 onClick={() => setGenerationFilter(gen)}
+                 className={`px-3 py-1.5 rounded-xl text-[10px] font-bold transition-all ${generationFilter === gen ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+               >
+                 نسل {gen}
+               </button>
+             ))}
+           </div>
+
+           <div className="w-px h-6 bg-slate-200 mx-1" />
+
            <button 
-             onClick={clearAll}
-             className="p-2 text-rose-500 hover:bg-rose-50 rounded-full transition-colors"
-             title="پاکسازی کل پروژه"
+             onClick={() => setMode(mode === 'MANAGE' ? 'VIEW' : 'MANAGE')}
+             className={cn(
+               "p-2 rounded-full transition-colors",
+               mode === 'MANAGE' ? "bg-indigo-100 text-indigo-600" : "text-slate-500 hover:bg-slate-100"
+             )}
+             title="مدیریت مالکین"
            >
-             <Trash2 className="w-5 h-5" />
+             <UserCog className="w-5 h-5" />
            </button>
+           
            <button 
              onClick={() => setMode(mode === 'DIVIDE' ? 'VIEW' : 'DIVIDE')}
              className={cn(
@@ -499,6 +531,7 @@ export default function App() {
           selectedPointId={selectedPointId}
           centerTrigger={centerTrigger}
           parcels={parcels}
+          generationFilter={generationFilter}
         />
 
         {/* Floating Controls */}
@@ -914,6 +947,59 @@ export default function App() {
                 >
                   متوجه شدم
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Owner Modal */}
+      <AnimatePresence>
+        {showOwnerModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4" dir="rtl">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-[32px] shadow-2xl w-full max-w-md overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                <h2 className="text-xl font-bold text-slate-900">مدیریت مالک قطعه</h2>
+                <button onClick={() => setShowOwnerModal(false)} className="p-2 hover:bg-slate-100 rounded-full">
+                  <X className="w-5 h-5 text-slate-400" />
+                </button>
+              </div>
+
+              <div className="p-8 space-y-6">
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">نام مالک زمین</label>
+                  <input 
+                    type="text"
+                    value={ownerNameInput}
+                    onChange={(e) => setOwnerNameInput(e.target.value)}
+                    className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-4 py-4 focus:border-indigo-500 focus:outline-none transition-colors text-lg"
+                    placeholder="مثلاً: پدربزرگ (حاج محمد)"
+                    autoFocus
+                  />
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <button 
+                    onClick={() => {
+                      setOwnerNameInput('');
+                      handleUpdateOwner();
+                    }}
+                    className="py-4 bg-slate-100 text-rose-600 rounded-2xl font-bold hover:bg-rose-50 transition-colors"
+                  >
+                    حذف نام
+                  </button>
+                  <button 
+                    onClick={handleUpdateOwner}
+                    className="py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
+                  >
+                    ثبت نام مالک
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>
