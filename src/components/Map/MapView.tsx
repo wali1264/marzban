@@ -27,8 +27,11 @@ interface MapViewProps {
   userLocation?: { lat: number; lng: number; accuracy: number };
   showUserLocation: boolean;
   selectedPointId: string | null;
-  centerTrigger?: number; // Used to trigger centering
+  centerTrigger?: number;
   parcels?: Parcel[];
+  onPointLongPress?: (pointId: string) => void;
+  onLineLongPress?: (connId: string) => void;
+  onParcelUpdate?: (parcelId: string, updates: Partial<Parcel>) => void;
 }
 
 // Find all simple cycles in the graph of connections
@@ -161,11 +164,27 @@ export default function MapView({
   showUserLocation,
   selectedPointId,
   centerTrigger,
-  parcels = []
+  parcels = [],
+  onPointLongPress,
+  onLineLongPress,
+  onParcelUpdate
 }: MapViewProps) {
   
   const cycles = findCycles(points, connections);
   const [zoom, setZoom] = useState(13);
+  const [longPressTimer, setLongPressTimer] = useState<NodeJS.Timeout | null>(null);
+
+  const handleLongPressStart = (callback: () => void) => {
+    const timer = setTimeout(callback, 500);
+    setLongPressTimer(timer);
+  };
+
+  const handleLongPressEnd = () => {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      setLongPressTimer(null);
+    }
+  };
 
   const renderConnections = () => {
     return connections.map(conn => {
@@ -183,7 +202,11 @@ export default function MapView({
               click: (e) => {
                 L.DomEvent.stopPropagation(e);
                 onConnectionClick(conn.id);
-              }
+              },
+              mousedown: () => handleLongPressStart(() => onLineLongPress?.(conn.id)),
+              mouseup: handleLongPressEnd,
+              touchstart: () => handleLongPressStart(() => onLineLongPress?.(conn.id)),
+              touchend: handleLongPressEnd
             }}
           />
         );
@@ -195,13 +218,41 @@ export default function MapView({
   const renderPolygons = () => {
     return cycles.map((cycle, idx) => {
       const area = calculatePolygonArea(cycle);
+      const centroid = getCentroid(cycle);
+      const cycleIds = cycle.map(pt => pt.id).sort().join(',');
+      const parcel = parcels.find(p => p.pointIds.sort().join(',') === cycleIds);
       
-      // Responsive label logic
-      const isVisible = zoom > 15;
-      const scale = Math.max(0.5, Math.min(1, (zoom - 14) / 4));
+      // Responsive visibility logic
+      const isVisible = zoom > 14;
+      const scale = Math.max(0.2, Math.min(1, (zoom - 13) / 5));
+      const opacity = Math.max(0, Math.min(1, (zoom - 14) * 2));
 
       return (
         <React.Fragment key={`cycle-group-${idx}`}>
+          {/* Watermark Name */}
+          {parcel && (
+            <Marker
+              position={centroid}
+              interactive={false}
+              icon={L.divIcon({
+                className: 'watermark-icon',
+                html: `<div style="
+                  opacity: ${opacity * 0.15};
+                  transform: scale(${scale * 2});
+                  font-family: serif;
+                  font-weight: 900;
+                  white-space: nowrap;
+                  color: #000;
+                  pointer-events: none;
+                  text-transform: uppercase;
+                  letter-spacing: 0.1em;
+                ">${parcel.name}</div>`,
+                iconSize: [0, 0],
+                iconAnchor: [0, 0]
+              })}
+            />
+          )}
+
           <Polygon 
             positions={cycle.map(p => [p.lat, p.lng])}
             pathOptions={{
@@ -218,48 +269,74 @@ export default function MapView({
                 }
               }
             }}
-          >
-            {isVisible && (
-              <Tooltip permanent direction="center" className="area-tooltip">
-                <div 
-                  className="flex flex-col items-center bg-white/90 backdrop-blur-sm px-2 py-1 rounded-lg border border-emerald-200 shadow-sm transition-all duration-300" 
+          />
+
+          {/* Draggable Area Card */}
+          {isVisible && (
+            <Marker
+              position={centroid}
+              draggable={true}
+              eventHandlers={{
+                dragend: (e) => {
+                  // In a real app, we'd save the offset. 
+                  // For now, we just let Leaflet handle the visual position.
+                }
+              }}
+              icon={L.divIcon({
+                className: 'area-card-icon',
+                html: `<div 
+                  class="flex flex-col items-center bg-white/95 backdrop-blur-md px-4 py-2 rounded-2xl border border-emerald-100 shadow-2xl transition-all duration-500" 
                   dir="rtl"
-                  style={{ transform: `scale(${scale})`, opacity: isVisible ? 1 : 0 }}
+                  style="transform: scale(${scale}); opacity: ${opacity}; min-width: 100px;"
                 >
-                  <span className="text-[10px] text-slate-500 font-bold">مساحت کل</span>
-                  <div className="flex items-baseline gap-0.5">
-                    <span className="text-sm font-mono font-bold text-emerald-700">{area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</span>
-                    <span className="text-[8px] text-emerald-600 font-bold">متر مربع</span>
+                  <span class="text-[10px] text-slate-400 font-bold mb-1">گزارش مساحت</span>
+                  <div class="flex items-baseline gap-1">
+                    <span class="text-lg font-mono font-black text-emerald-700">${area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</span>
+                    <span class="text-[10px] text-emerald-600 font-bold">متر مربع</span>
                   </div>
-                </div>
-              </Tooltip>
-            )}
-          </Polygon>
+                </div>`,
+                iconSize: [120, 60],
+                iconAnchor: [60, 30]
+              })}
+            />
+          )}
 
           {/* Render Divisions if any */}
-          {parcels.find(p => {
-            const cycleIds = cycle.map(pt => pt.id).sort().join(',');
-            const parcelIds = p.pointIds.sort().join(',');
-            return cycleIds === parcelIds;
-          })?.divisions.map(div => (
-            <Polygon
-              key={div.id}
-              positions={div.geometry}
-              pathOptions={{
-                color: '#0ea5e9',
-                fillColor: '#0ea5e9',
-                fillOpacity: 0.2,
-                weight: 2,
-                dashArray: '5, 5'
-              }}
-            >
-               <Tooltip permanent direction="center">
-                <div className="bg-white/80 px-1 rounded text-[8px] font-bold text-blue-700">
-                  {div.percentage}%
-                </div>
-              </Tooltip>
-            </Polygon>
-          ))}
+          {parcel?.divisions.map(div => {
+            const divCentroid = getCentroid(div.geometry.map(g => ({ lat: g[0], lng: g[1] } as Point)));
+            return (
+              <React.Fragment key={div.id}>
+                <Polygon
+                  positions={div.geometry}
+                  pathOptions={{
+                    color: '#0ea5e9',
+                    fillColor: '#0ea5e9',
+                    fillOpacity: 0.2,
+                    weight: 2,
+                    dashArray: '5, 5'
+                  }}
+                />
+                {isVisible && (
+                  <Marker
+                    position={divCentroid}
+                    draggable={true}
+                    icon={L.divIcon({
+                      className: 'division-card-icon',
+                      html: `<div 
+                        class="bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-xl border border-blue-100 shadow-xl transition-all duration-500 flex flex-col items-center"
+                        style="transform: scale(${scale * 0.9}); opacity: ${opacity};"
+                      >
+                        <span class="text-[8px] text-slate-400 font-bold">${div.partnerId}</span>
+                        <span class="text-xs font-black text-blue-700">${div.percentage}%</span>
+                      </div>`,
+                      iconSize: [60, 40],
+                      iconAnchor: [30, 20]
+                    })}
+                  />
+                )}
+              </React.Fragment>
+            );
+          })}
         </React.Fragment>
       );
     });
@@ -313,6 +390,10 @@ export default function MapView({
                   L.DomEvent.stopPropagation(e);
                   onPointClick(point);
                 },
+                mousedown: () => handleLongPressStart(() => onPointLongPress?.(point.id)),
+                mouseup: handleLongPressEnd,
+                touchstart: () => handleLongPressStart(() => onPointLongPress?.(point.id)),
+                touchend: handleLongPressEnd
               }}
               icon={L.divIcon({
                 className: 'custom-div-icon',

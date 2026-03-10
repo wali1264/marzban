@@ -48,6 +48,9 @@ export default function App() {
   const [parcels, setParcels] = useState<Parcel[]>([]);
   const [showDivisionModal, setShowDivisionModal] = useState(false);
   const [selectedCycle, setSelectedCycle] = useState<Point[] | null>(null);
+  const [longPressTimer, setLongPressTimer] = useState<NodeJS.Timeout | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ type: 'POINT' | 'LINE'; id: string; neighborIds?: string[] } | null>(null);
+  const [showActionModal, setShowActionModal] = useState(false);
 
   // Load from local storage on mount
   useEffect(() => {
@@ -255,7 +258,7 @@ export default function App() {
     return bestCoords.map(c => [c[1], c[0]] as [number, number]);
   };
 
-  const handleAddDivision = (name: string, percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL') => {
+  const handleAddDivision = (partnerName: string, percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL', parcelName?: string) => {
     if (!selectedCycle) return;
 
     const parcelId = selectedCycle.map(p => p.id).sort().join(',');
@@ -268,12 +271,10 @@ export default function App() {
     }
 
     const geometry = splitPolygon(selectedCycle, percentage + currentTotal, orientation);
-    // Note: This simple split logic needs refinement for multiple divisions, 
-    // but for now it demonstrates the concept.
     
     const newDivision: Division = {
       id: Math.random().toString(36).substr(2, 9),
-      partnerId: name,
+      partnerId: partnerName,
       percentage,
       geometry,
       orientation
@@ -282,12 +283,13 @@ export default function App() {
     if (existingParcel) {
       setParcels(prev => prev.map(p => p.id === existingParcel.id ? {
         ...p,
+        name: parcelName || p.name,
         divisions: [...p.divisions, newDivision]
       } : p));
     } else {
       const newParcel: Parcel = {
         id: Math.random().toString(36).substr(2, 9),
-        name: "قطعه جدید",
+        name: parcelName || "قطعه جدید",
         pointIds: selectedCycle.map(p => p.id),
         divisions: [newDivision],
         area: turf.area(turf.polygon([[...selectedCycle.map(p => [p.lng, p.lat]), [selectedCycle[0].lng, selectedCycle[0].lat]]]))
@@ -300,6 +302,51 @@ export default function App() {
   const startUpdate = () => {
     setIsUpdating(true);
     setShowRecorder(true);
+  };
+
+  const handlePointLongPress = (pointId: string) => {
+    // Find neighbors in connections
+    const connectedConns = connections.filter(c => c.fromId === pointId || c.toId === pointId);
+    if (connectedConns.length === 2) {
+      const neighborIds = connectedConns.map(c => c.fromId === pointId ? c.toId : c.fromId);
+      setPendingAction({ type: 'POINT', id: pointId, neighborIds });
+      setShowActionModal(true);
+    }
+  };
+
+  const handleLineLongPress = (connId: string) => {
+    setPendingAction({ type: 'LINE', id: connId });
+    setShowActionModal(true);
+  };
+
+  const confirmPendingAction = () => {
+    if (!pendingAction) return;
+
+    if (pendingAction.type === 'POINT') {
+      const { id, neighborIds } = pendingAction;
+      if (neighborIds && neighborIds.length === 2) {
+        const [n1, n2] = neighborIds;
+        const bypassConn: Connection = {
+          id: Math.random().toString(36).substr(2, 9),
+          fromId: n1,
+          toId: n2
+        };
+        setConnections(prev => [...prev.filter(c => c.fromId !== id && c.toId !== id), bypassConn]);
+      } else {
+        setConnections(prev => prev.filter(c => c.fromId !== id && c.toId !== id));
+      }
+      setPoints(prev => prev.filter(p => p.id !== id));
+      if (selectedPointId === id) setSelectedPointId(null);
+    } else if (pendingAction.type === 'LINE') {
+      setConnections(prev => prev.filter(c => c.id !== pendingAction.id));
+    }
+
+    setShowActionModal(false);
+    setPendingAction(null);
+  };
+
+  const handleParcelUpdate = (parcelId: string, updates: Partial<Parcel>) => {
+    setParcels(prev => prev.map(p => p.id === parcelId ? { ...p, ...updates } : p));
   };
 
   const selectedPoint = points.find(p => p.id === selectedPointId);
@@ -349,6 +396,9 @@ export default function App() {
           selectedPointId={selectedPointId}
           centerTrigger={centerTrigger}
           parcels={parcels}
+          onPointLongPress={handlePointLongPress}
+          onLineLongPress={handleLineLongPress}
+          onParcelUpdate={handleParcelUpdate}
         />
 
         {/* Floating Controls */}
@@ -527,10 +577,20 @@ export default function App() {
                   handleAddDivision(
                     formData.get('name') as string,
                     Number(formData.get('percentage')),
-                    formData.get('orientation') as 'HORIZONTAL' | 'VERTICAL'
+                    formData.get('orientation') as 'HORIZONTAL' | 'VERTICAL',
+                    formData.get('parcelName') as string
                   );
                 }}>
                   <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-2">نام قطعه زمین</label>
+                      <input 
+                        name="parcelName"
+                        className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-4 py-3 focus:border-blue-500 focus:outline-none transition-colors"
+                        placeholder="مثلاً: زمین پدری"
+                        defaultValue={parcels.find(p => p.pointIds.sort().join(',') === selectedCycle?.map(pt => pt.id).sort().join(','))?.name || ""}
+                      />
+                    </div>
                     <div>
                       <label className="block text-sm font-bold text-slate-700 mb-2">نام شریک / فرزند</label>
                       <input 
@@ -581,6 +641,57 @@ export default function App() {
                     تایید و ایجاد سهم
                   </button>
                 </form>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Action Modal (Long Press) */}
+      <AnimatePresence>
+        {showActionModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-4" dir="rtl">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-[32px] shadow-2xl w-full max-w-md overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="bg-rose-100 p-2 rounded-xl">
+                    <Trash2 className="w-6 h-6 text-rose-600" />
+                  </div>
+                  <h2 className="text-xl font-bold text-slate-900">
+                    {pendingAction?.type === 'POINT' ? 'حذف از زنجیره' : 'قطع اتصال'}
+                  </h2>
+                </div>
+                <button onClick={() => setShowActionModal(false)} className="p-2 hover:bg-slate-100 rounded-full">
+                  <X className="w-5 h-5 text-slate-400" />
+                </button>
+              </div>
+
+              <div className="p-6">
+                <p className="text-slate-600 mb-8 leading-relaxed">
+                  {pendingAction?.type === 'POINT' 
+                    ? 'آیا می‌خواهید این نقطه را از زنجیره حذف کنید؟ در صورت حذف، دو نقطه مجاور به هم متصل خواهند شد تا مرز اصلاح شود.'
+                    : 'آیا از قطع این اتصال مرزی اطمینان دارید؟ این کار باعث باز شدن حلقه مرزی می‌شود.'}
+                </p>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button 
+                    onClick={() => setShowActionModal(false)}
+                    className="py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-all"
+                  >
+                    انصراف
+                  </button>
+                  <button 
+                    onClick={confirmPendingAction}
+                    className="py-4 bg-rose-600 text-white rounded-2xl font-bold shadow-lg shadow-rose-100 hover:bg-rose-700 transition-all active:scale-95"
+                  >
+                    تایید و اجرا
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>
