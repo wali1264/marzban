@@ -179,7 +179,24 @@ export default function MapView({
   const cyclesWithGen = useMemo(() => {
     const polys = cycles.map(cycle => {
       const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
-      return { cycle, poly: turf.polygon([coords as any]) };
+      return { 
+        cycle, 
+        poly: turf.polygon([coords as any]),
+        connectionIds: new Set<string>()
+      };
+    });
+
+    // Map connections to their IDs for easy lookup
+    polys.forEach(item => {
+      for (let i = 0; i < item.cycle.length; i++) {
+        const p1 = item.cycle[i];
+        const p2 = item.cycle[(i + 1) % item.cycle.length];
+        const conn = connections.find(c => 
+          (c.fromId === p1.id && c.toId === p2.id) || 
+          (c.fromId === p2.id && c.toId === p1.id)
+        );
+        if (conn) item.connectionIds.add(conn.id);
+      }
     });
 
     return polys.map(item => {
@@ -202,7 +219,17 @@ export default function MapView({
       }
       return { ...item, gen };
     });
-  }, [cycles]);
+  }, [cycles, connections]);
+
+  const visibleConnectionIds = useMemo(() => {
+    const ids = new Set<string>();
+    cyclesWithGen.forEach(item => {
+      if (item.gen === generationFilter) {
+        item.connectionIds.forEach(id => ids.add(id));
+      }
+    });
+    return ids;
+  }, [cyclesWithGen, generationFilter]);
 
   const handleLongPressStart = (callback?: () => void) => {
     if (!callback) return;
@@ -221,6 +248,9 @@ export default function MapView({
 
   const renderConnections = () => {
     return connections.map(conn => {
+      // Filter connections based on generation
+      if (!visibleConnectionIds.has(conn.id) && mode !== 'CONNECT') return null;
+
       const from = points.find(p => p.id === conn.fromId);
       const to = points.find(p => p.id === conn.toId);
       if (from && to) {
@@ -228,7 +258,7 @@ export default function MapView({
           <Polyline 
             key={conn.id} 
             positions={[[from.lat, from.lng], [to.lat, to.lng]]} 
-            color="#10b981" 
+            color={mode === 'CONNECT' ? "#10b981" : generationFilter === 1 ? '#10b981' : generationFilter === 2 ? '#6366f1' : '#f59e0b'} 
             weight={6}
             opacity={0.6}
             eventHandlers={{
@@ -255,18 +285,19 @@ export default function MapView({
   const renderPolygons = () => {
     return cyclesWithGen.map((item, idx) => {
       const { cycle, gen } = item;
+      
+      // Strict generation filtering
+      if (gen !== generationFilter) return null;
+
       const area = calculatePolygonArea(cycle);
       
       const parcelId = cycle.map(p => p.id).sort().join(',');
       const parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
 
-      // Visibility logic based on generation filter
+      // Visibility logic based on zoom
       const isVisible = zoom > 15;
       const scale = Math.max(0.5, Math.min(1, (zoom - 14) / 4));
       
-      // Only show area and owner name if generation matches filter
-      const showDetails = gen === generationFilter;
-
       return (
         <React.Fragment key={`cycle-group-${idx}`}>
           <Polygon 
@@ -274,9 +305,8 @@ export default function MapView({
             pathOptions={{
               color: gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b',
               fillColor: gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b',
-              fillOpacity: showDetails ? 0.1 : 0.02,
-              weight: showDetails ? 2 : 1,
-              dashArray: showDetails ? '' : '5, 10'
+              fillOpacity: 0.1,
+              weight: 2
             }}
             eventHandlers={{
               click: (e) => {
@@ -287,7 +317,7 @@ export default function MapView({
               }
             }}
           >
-            {isVisible && showDetails && (
+            {isVisible && (
               <>
                 <Tooltip permanent direction="center" className="area-tooltip">
                   <div 

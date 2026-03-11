@@ -208,12 +208,23 @@ export default function App() {
       setShowDivisionModal(true);
     } else if (mode === 'MANAGE') {
       const parcelId = cycle.map(p => p.id).sort().join(',');
-      const parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
-      if (parcel) {
-        setSelectedParcelForOwner(parcel);
-        setOwnerNameInput(parcel.ownerName || '');
-        setShowOwnerModal(true);
+      let parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+      
+      if (!parcel) {
+        // Create a temporary parcel if it doesn't exist
+        parcel = {
+          id: Math.random().toString(36).substr(2, 9),
+          pointIds: cycle.map(p => p.id),
+          ownerName: '',
+          divisions: [],
+          totalArea: 0 // Will be calculated if needed, but ownerName is the focus here
+        };
+        // We don't add it to state yet, we'll add it when the owner is saved
       }
+      
+      setSelectedParcelForOwner(parcel);
+      setOwnerNameInput(parcel.ownerName || '');
+      setShowOwnerModal(true);
     }
   };
 
@@ -443,9 +454,17 @@ export default function App() {
 
   const handleUpdateOwner = () => {
     if (selectedParcelForOwner) {
-      setParcels(prev => prev.map(p => 
-        p.id === selectedParcelForOwner.id ? { ...p, ownerName: ownerNameInput } : p
-      ));
+      setParcels(prev => {
+        const exists = prev.some(p => p.id === selectedParcelForOwner.id);
+        if (exists) {
+          return prev.map(p => 
+            p.id === selectedParcelForOwner.id ? { ...p, ownerName: ownerNameInput } : p
+          );
+        } else {
+          // Add the new parcel
+          return [...prev, { ...selectedParcelForOwner, ownerName: ownerNameInput }];
+        }
+      });
       setShowOwnerModal(false);
       setSelectedParcelForOwner(null);
       setOwnerNameInput('');
@@ -507,9 +526,6 @@ export default function App() {
              title="حالت تقسیم اراضی"
            >
              <Users className="w-5 h-5" />
-           </button>
-           <button className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
-             <Settings className="w-5 h-5" />
            </button>
         </div>
       </header>

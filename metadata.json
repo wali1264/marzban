@@ -1,5 +1,5 @@
 {
-  "name": "50(Marzban)",
+  "name": "2 مرزبان (Marzban)",
   "description": "سیستم مدیریت هوشمند اراضی و تقسیم ارث با استفاده از GPS و هوش مصنوعی",
   "requestFramePermissions": [
     "geolocation"
