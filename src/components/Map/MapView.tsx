@@ -33,6 +33,7 @@ interface MapViewProps {
   centerTrigger?: number; // Used to trigger centering
   parcels?: Parcel[];
   generationFilter?: number;
+  highlightedParcelId?: string | null;
 }
 
 // Find all simple cycles in the graph of connections
@@ -114,10 +115,12 @@ function getCentroid(nodes: Point[]): [number, number] {
 
 function MapController({ 
   centerOn, 
-  points 
+  points,
+  highlightedParcelCenter
 }: { 
   centerOn?: { lat: number; lng: number }; 
-  points: Point[] 
+  points: Point[];
+  highlightedParcelCenter?: { lat: number; lng: number };
 }) {
   const map = useMap();
   const [hasInitialFit, setHasInitialFit] = useState(false);
@@ -131,12 +134,14 @@ function MapController({
     }
   }, [points, map, hasInitialFit]);
 
-  // Manual center on user - only when centerTrigger changes
+  // Manual center on user or highlighted parcel - only when centerTrigger changes
   useEffect(() => {
-    if (centerOn) {
+    if (highlightedParcelCenter) {
+      map.setView([highlightedParcelCenter.lat, highlightedParcelCenter.lng], 19);
+    } else if (centerOn) {
       map.setView([centerOn.lat, centerOn.lng], map.getZoom() > 18 ? map.getZoom() : 18);
     }
-  }, [centerOn, map]);
+  }, [centerOn, highlightedParcelCenter, map]);
 
   return null;
 }
@@ -168,7 +173,8 @@ export default function MapView({
   selectedPointId,
   centerTrigger,
   parcels = [],
-  generationFilter = 1
+  generationFilter = 1,
+  highlightedParcelId = null
 }: MapViewProps) {
   
   const cycles = findCycles(points, connections);
@@ -304,6 +310,9 @@ export default function MapView({
       // Visibility logic based on zoom
       const isVisible = zoom > 15;
       const scale = Math.max(0.5, Math.min(1, (zoom - 14) / 4));
+
+      // If a parcel is highlighted, only show its details
+      const shouldShowDetails = !highlightedParcelId || highlightedParcelId === parcel?.id;
       
       // Calculate centroid for precise positioning
       const centroid = turf.centroid(poly);
@@ -341,7 +350,7 @@ export default function MapView({
             icon={transparentIcon}
             interactive={false}
           >
-            {isVisible && (
+            {isVisible && shouldShowDetails && (
               <Tooltip permanent direction="center" className="area-tooltip">
                 <div className="relative flex items-center justify-center">
                   {/* Owner Name Watermark */}
@@ -418,6 +427,18 @@ export default function MapView({
     });
   };
 
+  const highlightedParcelCenter = useMemo(() => {
+    if (!highlightedParcelId) return null;
+    const item = cyclesWithGen.find(c => {
+      const parcelId = c.cycle.map(p => p.id).sort().join(',');
+      const parcel = parcels?.find(p => p.pointIds.sort().join(',') === parcelId);
+      return parcel?.id === highlightedParcelId;
+    });
+    if (!item) return null;
+    const centroid = turf.centroid(item.poly);
+    return { lat: centroid.geometry.coordinates[1], lng: centroid.geometry.coordinates[0] };
+  }, [highlightedParcelId, cyclesWithGen, parcels]);
+
   return (
     <div className="relative w-full h-full">
       <MapContainer 
@@ -438,6 +459,7 @@ export default function MapView({
         <MapController 
           centerOn={centerTrigger ? (userLocation || undefined) : undefined} 
           points={points}
+          highlightedParcelCenter={highlightedParcelCenter || undefined}
         />
         
         {/* Live User Location - Only shown if toggled ON */}

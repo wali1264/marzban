@@ -27,7 +27,11 @@ import {
   Users,
   Scissors,
   RotateCw,
-  UserCog
+  UserCog,
+  Search,
+  ChevronDown,
+  SearchX,
+  ChevronUp
 } from 'lucide-react';
 import * as turf from '@turf/turf';
 import MapView from './components/Map/MapView';
@@ -59,6 +63,11 @@ export default function App() {
   const [showOwnerModal, setShowOwnerModal] = useState(false);
   const [selectedParcelForOwner, setSelectedParcelForOwner] = useState<Parcel | null>(null);
   const [ownerNameInput, setOwnerNameInput] = useState('');
+
+  const [isSearchActive, setIsSearchActive] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isGenMenuOpen, setIsGenMenuOpen] = useState(false);
+  const [highlightedParcelId, setHighlightedParcelId] = useState<string | null>(null);
 
   const [pendingDeleteConnId, setPendingDeleteConnId] = useState<string | null>(null);
   const [pendingDivisionAction, setPendingDivisionAction] = useState<{ parcelId: string, divId: string, type: 'DELETE' | 'EDIT' } | null>(null);
@@ -492,19 +501,64 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-           <div className="flex bg-slate-100 p-1 rounded-2xl gap-1">
-             {[1, 2, 3].map(gen => (
-               <button
-                 key={gen}
-                 onClick={() => setGenerationFilter(gen)}
-                 className={`px-3 py-1.5 rounded-xl text-[10px] font-bold transition-all ${generationFilter === gen ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-               >
-                 نسل {gen}
-               </button>
-             ))}
+           {/* Expandable Generation Menu */}
+           <div className="relative">
+             <button
+               onClick={() => setIsGenMenuOpen(!isGenMenuOpen)}
+               className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-2xl text-xs font-bold text-slate-700 transition-all shadow-sm"
+             >
+               <Layers className="w-4 h-4 text-indigo-600" />
+               <span>نسل {generationFilter}</span>
+               <ChevronDown className={cn("w-4 h-4 transition-transform", isGenMenuOpen && "rotate-180")} />
+             </button>
+
+             <AnimatePresence>
+               {isGenMenuOpen && (
+                 <motion.div
+                   initial={{ opacity: 0, y: -10 }}
+                   animate={{ opacity: 1, y: 0 }}
+                   exit={{ opacity: 0, y: -10 }}
+                   className="absolute top-full left-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-xl z-50 overflow-hidden min-w-[120px]"
+                 >
+                   {[1, 2, 3].map(gen => (
+                     <button
+                       key={gen}
+                       onClick={() => {
+                         setGenerationFilter(gen);
+                         setIsGenMenuOpen(false);
+                       }}
+                       className={cn(
+                         "w-full px-4 py-3 text-right text-xs font-bold transition-colors flex items-center justify-between",
+                         generationFilter === gen ? "bg-indigo-50 text-indigo-600" : "text-slate-600 hover:bg-slate-50"
+                       )}
+                     >
+                       <span>نسل {gen}</span>
+                       {generationFilter === gen && <CheckCircle2 className="w-3 h-3" />}
+                     </button>
+                   ))}
+                 </motion.div>
+               )}
+             </AnimatePresence>
            </div>
 
            <div className="w-px h-6 bg-slate-200 mx-1" />
+
+           <button 
+             onClick={() => {
+               setIsSearchActive(!isSearchActive);
+               if (isSearchActive) {
+                 setSearchQuery('');
+                 setHighlightedParcelId(null);
+               }
+             }}
+             className={cn(
+               "p-2 rounded-full transition-colors",
+               isSearchActive ? "bg-amber-100 text-amber-600" : "text-slate-500 hover:bg-slate-100"
+             )}
+             title="جستجوی مالک"
+           >
+             {isSearchActive ? <SearchX className="w-5 h-5" /> : <Search className="w-5 h-5" />}
+           </button>
 
            <button 
              onClick={() => setMode(mode === 'MANAGE' ? 'VIEW' : 'MANAGE')}
@@ -537,7 +591,10 @@ export default function App() {
           connections={connections}
           mode={mode}
           onPointClick={handlePointClick}
-          onMapClick={() => setSelectedPointId(null)}
+          onMapClick={() => {
+            setSelectedPointId(null);
+            if (isSearchActive && !searchQuery) setIsSearchActive(false);
+          }}
           onConnectionClick={handleConnectionClick}
           onConnectionLongPress={(id) => mode === 'CONNECT' && setPendingDeleteConnId(id)}
           onPolygonClick={handlePolygonClick}
@@ -548,6 +605,7 @@ export default function App() {
           centerTrigger={centerTrigger}
           parcels={parcels}
           generationFilter={generationFilter}
+          highlightedParcelId={highlightedParcelId}
         />
 
         {/* Floating Controls */}
@@ -599,15 +657,78 @@ export default function App() {
         </div>
 
         {/* Bottom Action Bar */}
-        <div className="absolute bottom-8 left-0 right-0 flex justify-center px-4 z-[1000]">
+        <div className="absolute bottom-8 left-0 right-0 flex flex-col items-center px-4 z-[1000] gap-3">
+          <AnimatePresence>
+            {isSearchActive && searchQuery.length > 0 && (
+              <motion.div 
+                initial={{ y: 20, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: 20, opacity: 0 }}
+                className="bg-white/95 backdrop-blur-md border border-slate-200 rounded-3xl shadow-2xl w-full max-w-md overflow-hidden max-h-60 overflow-y-auto"
+              >
+                {parcels.filter(p => p.ownerName?.toLowerCase().includes(searchQuery.toLowerCase())).length > 0 ? (
+                  parcels
+                    .filter(p => p.ownerName?.toLowerCase().includes(searchQuery.toLowerCase()))
+                    .map(parcel => (
+                      <button
+                        key={parcel.id}
+                        onClick={() => {
+                          setHighlightedParcelId(parcel.id);
+                          setCenterTrigger(prev => prev + 1);
+                          // Zoom to parcel logic: we need to find the center of the parcel
+                          // MapView handles centering via centerTrigger, but we need to tell it which point to center on
+                          // For now, MapView centers on user location if available, or just triggers a re-render
+                          // I'll update MapView to handle centering on a specific parcel if highlightedParcelId is set
+                        }}
+                        className={cn(
+                          "w-full px-5 py-4 text-right flex items-center justify-between border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors",
+                          highlightedParcelId === parcel.id ? "bg-emerald-50 text-emerald-700" : "text-slate-700"
+                        )}
+                      >
+                        <div className="flex flex-col items-start text-right w-full">
+                          <span className="font-bold text-sm">{parcel.ownerName}</span>
+                          <span className="text-[10px] text-slate-400">قطعه زمین شماره {parcel.id.slice(0, 4)}</span>
+                        </div>
+                        <Navigation className="w-4 h-4 text-slate-300" />
+                      </button>
+                    ))
+                ) : (
+                  <div className="p-8 text-center text-slate-400 text-sm">
+                    مالکی با این نام پیدا نشد
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <div className="bg-white/90 backdrop-blur-md border border-white/20 p-2 rounded-3xl shadow-2xl flex items-center gap-2 max-w-md w-full">
-            <button 
-              onClick={() => { setIsUpdating(false); setShowRecorder(true); }}
-              className="flex-1 flex items-center justify-center gap-2 py-4 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg shadow-emerald-200 transition-all active:scale-95"
-            >
-              <Crosshair className="w-5 h-5" />
-              ثبت مختصات دقیق
-            </button>
+            {!isSearchActive ? (
+              <button 
+                onClick={() => { setIsUpdating(false); setShowRecorder(true); }}
+                className="flex-1 flex items-center justify-center gap-2 py-4 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg shadow-emerald-200 transition-all active:scale-95"
+              >
+                <Crosshair className="w-5 h-5" />
+                ثبت مختصات دقیق
+              </button>
+            ) : (
+              <div className="flex-1 flex items-center gap-2 px-4 py-1 bg-slate-100 rounded-2xl border border-slate-200/50">
+                <Search className="w-5 h-5 text-slate-400" />
+                <input 
+                  type="text"
+                  autoFocus
+                  placeholder="جستجوی نام مالک..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="flex-1 py-3 bg-transparent border-none outline-none text-sm font-bold text-slate-700 placeholder:text-slate-400 text-right"
+                  dir="rtl"
+                />
+                {searchQuery && (
+                  <button onClick={() => { setSearchQuery(''); setHighlightedParcelId(null); }}>
+                    <X className="w-4 h-4 text-slate-400" />
+                  </button>
+                )}
+              </div>
+            )}
             
             <div className="w-px h-8 bg-slate-200 mx-1" />
             
