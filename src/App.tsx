@@ -34,11 +34,13 @@ import {
   ChevronUp,
   Lock,
   ShieldCheck,
-  KeyRound
+  KeyRound,
+  Database
 } from 'lucide-react';
 import * as turf from '@turf/turf';
 import MapView from './components/Map/MapView';
 import PrecisionRecorder from './components/Recorder/PrecisionRecorder';
+import BackupModal from './components/Backup/BackupModal';
 import { Point, Connection, AppMode, Parcel, Partner, Division } from './types';
 import { cn } from './utils';
 import { geminiService } from './services/gemini';
@@ -80,6 +82,7 @@ export default function App() {
   const [pendingDeleteConnId, setPendingDeleteConnId] = useState<string | null>(null);
   const [pendingDivisionAction, setPendingDivisionAction] = useState<{ parcelId: string, divId: string, type: 'DELETE' | 'EDIT' } | null>(null);
   const [editPercentage, setEditPercentage] = useState<string>('');
+  const [showBackupModal, setShowBackupModal] = useState(false);
 
   // Load from local storage on mount
   useEffect(() => {
@@ -488,6 +491,12 @@ export default function App() {
     }
   };
 
+  const handleRestore = (data: { points: Point[]; connections: Connection[]; parcels: Parcel[] }) => {
+    setPoints(data.points);
+    setConnections(data.connections);
+    setParcels(data.parcels);
+  };
+
   const startUpdate = () => {
     setIsUpdating(true);
     setShowRecorder(true);
@@ -498,24 +507,14 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen w-full bg-slate-50 overflow-hidden font-sans" dir="rtl">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between shadow-sm z-10">
+      <header className="bg-white border-b border-slate-200 px-4 py-2 flex items-center justify-between shadow-sm z-10">
         <div className="flex items-center gap-2">
-          <div className="bg-emerald-600 p-2 rounded-lg shadow-emerald-200 shadow-lg">
-            <Layers className="text-white w-5 h-5" />
-          </div>
-          <div>
-            <h1 className="font-bold text-slate-900 text-lg leading-tight">مرزبان</h1>
-            <p className="text-xs text-slate-500">سیستم نقشه‌برداری اراضی</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
            {/* Expandable Generation Menu */}
            <div className="relative">
              <button
                onClick={() => setIsGenMenuOpen(!isGenMenuOpen)}
-               className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-2xl text-xs font-bold text-slate-700 transition-all shadow-sm"
+               className="flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700 transition-all shadow-sm"
              >
-               <Layers className="w-4 h-4 text-indigo-600" />
                <span>نسل {generationFilter}</span>
                <ChevronDown className={cn("w-4 h-4 transition-transform", isGenMenuOpen && "rotate-180")} />
              </button>
@@ -526,7 +525,7 @@ export default function App() {
                    initial={{ opacity: 0, y: -10 }}
                    animate={{ opacity: 1, y: 0 }}
                    exit={{ opacity: 0, y: -10 }}
-                   className="absolute top-full left-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-xl z-50 overflow-hidden min-w-[120px]"
+                   className="absolute top-full right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-xl z-50 overflow-hidden min-w-[120px]"
                  >
                    {[1, 2, 3].map(gen => (
                      <button
@@ -548,9 +547,9 @@ export default function App() {
                )}
              </AnimatePresence>
            </div>
+        </div>
 
-           <div className="w-px h-6 bg-slate-200 mx-1" />
-
+        <div className="flex items-center gap-1 sm:gap-2">
            <button 
              onClick={() => {
                setIsSearchActive(!isSearchActive);
@@ -568,10 +567,16 @@ export default function App() {
              {isSearchActive ? <SearchX className="w-5 h-5" /> : <Search className="w-5 h-5" />}
            </button>
 
-           <div className="w-px h-6 bg-slate-200 mx-1" />
+           <button 
+             onClick={() => setShowBackupModal(true)}
+             className="p-2 rounded-full text-slate-500 hover:bg-slate-100 transition-colors"
+             title="پشتیبان‌گیری"
+           >
+             <Database className="w-5 h-5" />
+           </button>
 
-           {isAdmin ? (
-             <>
+           {isAdmin && (
+             <div className="flex items-center gap-1">
                <button 
                  onClick={() => setMode(mode === 'MANAGE' ? 'VIEW' : 'MANAGE')}
                  className={cn(
@@ -593,10 +598,6 @@ export default function App() {
                >
                  <Users className="w-5 h-5" />
                </button>
-             </>
-           ) : (
-             <div className="flex items-center px-2 py-1 bg-slate-50 rounded-lg border border-slate-100">
-               <span className="text-[10px] font-bold text-slate-400">حالت مشاهده</span>
              </div>
            )}
 
@@ -656,16 +657,19 @@ export default function App() {
           >
             <Navigation className="w-6 h-6" />
           </button>
-          <button 
-            onClick={() => setMode('CONNECT')}
-            className={cn(
-              "p-3 rounded-2xl shadow-xl transition-all",
-              mode === 'CONNECT' ? "bg-emerald-600 text-white" : "bg-white text-slate-600"
-            )}
-            title="حالت اتصال مرزها"
-          >
-            <LinkIcon className="w-6 h-6" />
-          </button>
+          
+          {isAdmin && (
+            <button 
+              onClick={() => setMode('CONNECT')}
+              className={cn(
+                "p-3 rounded-2xl shadow-xl transition-all",
+                mode === 'CONNECT' ? "bg-emerald-600 text-white" : "bg-white text-slate-600"
+              )}
+              title="حالت اتصال مرزها"
+            >
+              <LinkIcon className="w-6 h-6" />
+            </button>
+          )}
           
           <div className="h-px bg-slate-200 my-1" />
 
@@ -737,9 +741,12 @@ export default function App() {
             )}
           </AnimatePresence>
 
-          <div className="bg-white/90 backdrop-blur-md border border-white/20 p-2 rounded-3xl shadow-2xl flex items-center gap-2 max-w-md w-full">
+          <div className={cn(
+            "bg-white/90 backdrop-blur-md border border-white/20 p-2 rounded-3xl shadow-2xl flex items-center gap-2 transition-all duration-500",
+            (!isSearchActive && !isAdmin) ? "w-fit px-4" : "max-w-md w-full"
+          )}>
             {!isSearchActive ? (
-              isAdmin ? (
+              isAdmin && (
                 <button 
                   onClick={() => { setIsUpdating(false); setShowRecorder(true); }}
                   className="flex-1 flex items-center justify-center gap-2 py-4 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg shadow-emerald-200 transition-all active:scale-95"
@@ -747,11 +754,6 @@ export default function App() {
                   <Crosshair className="w-5 h-5" />
                   ثبت مختصات دقیق
                 </button>
-              ) : (
-                <div className="flex-1 flex items-center justify-center gap-2 py-4 bg-slate-100 text-slate-400 rounded-2xl font-bold border border-slate-200/50">
-                  <ShieldCheck className="w-5 h-5 opacity-30" />
-                  فقط مشاهده اراضی
-                </div>
               )
             ) : (
               <div className="flex-1 flex items-center gap-2 px-4 py-1 bg-slate-100 rounded-2xl border border-slate-200/50">
@@ -772,16 +774,6 @@ export default function App() {
                 )}
               </div>
             )}
-            
-            <div className="w-px h-8 bg-slate-200 mx-1" />
-            
-            <button 
-              onClick={() => setShowProjectInfo(true)}
-              className="p-4 text-slate-600 hover:bg-slate-100 rounded-2xl transition-colors"
-              title="اطلاعات پروژه"
-            >
-              <Info className="w-6 h-6" />
-            </button>
           </div>
         </div>
 
@@ -822,22 +814,24 @@ export default function App() {
                 <span className="text-[10px] text-slate-400">{new Date(selectedPoint.timestamp).toLocaleString('fa-IR')}</span>
               </div>
               
-              <div className="grid grid-cols-2 gap-3">
-                <button 
-                  onClick={() => deletePoint(selectedPoint.id)}
-                  className="flex items-center justify-center gap-2 py-4 bg-rose-50 text-rose-600 rounded-2xl font-bold hover:bg-rose-100 transition-colors"
-                >
-                  <Trash2 className="w-5 h-5" />
-                  حذف
-                </button>
-                <button 
-                  onClick={startUpdate}
-                  className="flex items-center justify-center gap-2 py-4 bg-amber-50 text-amber-600 rounded-2xl font-bold hover:bg-amber-100 transition-colors"
-                >
-                  <RefreshCw className="w-5 h-5" />
-                  بروزرسانی
-                </button>
-              </div>
+              {isAdmin && (
+                <div className="grid grid-cols-2 gap-3">
+                  <button 
+                    onClick={() => deletePoint(selectedPoint.id)}
+                    className="flex items-center justify-center gap-2 py-4 bg-rose-50 text-rose-600 rounded-2xl font-bold hover:bg-rose-100 transition-colors"
+                  >
+                    <Trash2 className="w-5 h-5" />
+                    حذف
+                  </button>
+                  <button 
+                    onClick={startUpdate}
+                    className="flex items-center justify-center gap-2 py-4 bg-amber-50 text-amber-600 rounded-2xl font-bold hover:bg-amber-100 transition-colors"
+                  >
+                    <RefreshCw className="w-5 h-5" />
+                    بروزرسانی
+                  </button>
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
@@ -1386,6 +1380,16 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Backup Modal */}
+      <BackupModal 
+        isOpen={showBackupModal}
+        onClose={() => setShowBackupModal(false)}
+        points={points}
+        connections={connections}
+        parcels={parcels}
+        onRestore={handleRestore}
+      />
     </div>
   );
 }
