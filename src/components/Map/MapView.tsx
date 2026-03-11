@@ -282,9 +282,16 @@ export default function MapView({
     });
   };
 
+  const transparentIcon = useMemo(() => L.divIcon({
+    className: 'bg-transparent',
+    html: '',
+    iconSize: [0, 0],
+    iconAnchor: [0, 0]
+  }), []);
+
   const renderPolygons = () => {
     return cyclesWithGen.map((item, idx) => {
-      const { cycle, gen } = item;
+      const { cycle, gen, poly } = item;
       
       // Strict generation filtering
       if (gen !== generationFilter) return null;
@@ -298,6 +305,16 @@ export default function MapView({
       const isVisible = zoom > 15;
       const scale = Math.max(0.5, Math.min(1, (zoom - 14) / 4));
       
+      // Calculate centroid for precise positioning
+      const centroid = turf.centroid(poly);
+      const [centerLng, centerLat] = centroid.geometry.coordinates;
+
+      // Zoom-based scaling for owner name
+      const baseFontSize = Math.max(16, Math.sqrt(area) / 3);
+      const zoomScale = Math.pow(1.15, zoom - 18);
+      const finalFontSize = baseFontSize * zoomScale;
+      const ownerOpacity = Math.min(0.25, Math.max(0, (zoom - 15) * 0.08));
+
       return (
         <React.Fragment key={`cycle-group-${idx}`}>
           <Polygon 
@@ -316,6 +333,13 @@ export default function MapView({
                 }
               }
             }}
+          />
+
+          {/* Centered Marker for Tooltips (Area Card & Owner Name) */}
+          <Marker 
+            position={[centerLat, centerLng]} 
+            icon={transparentIcon}
+            interactive={false}
           >
             {isVisible && (
               <>
@@ -336,9 +360,10 @@ export default function MapView({
                 {parcel?.ownerName && (
                   <Tooltip permanent direction="center" className="owner-watermark-tooltip">
                     <div 
-                      className="text-slate-900/20 font-black whitespace-nowrap pointer-events-none select-none transition-all duration-500"
+                      className="font-black whitespace-nowrap pointer-events-none select-none transition-all duration-500 text-slate-900"
                       style={{ 
-                        fontSize: `${Math.max(20, area / 500)}px`,
+                        fontSize: `${finalFontSize}px`,
+                        opacity: ownerOpacity,
                         transform: `rotate(-15deg)`
                       }}
                     >
@@ -348,7 +373,7 @@ export default function MapView({
                 )}
               </>
             )}
-          </Polygon>
+          </Marker>
 
           {/* Render Divisions if any */}
           {parcels.find(p => {
