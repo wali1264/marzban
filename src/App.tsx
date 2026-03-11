@@ -36,13 +36,15 @@ import {
   ShieldCheck,
   KeyRound,
   Database,
-  Zap
+  Zap,
+  RotateCcw
 } from 'lucide-react';
 import * as turf from '@turf/turf';
 import MapView from './components/Map/MapView';
 import PrecisionRecorder from './components/Recorder/PrecisionRecorder';
 import BackupModal from './components/Backup/BackupModal';
 import ConvertModal from './components/Convert/ConvertModal';
+import { RotationModal } from './components/Map/RotationModal';
 import { Point, Connection, AppMode, Parcel, Partner, Division } from './types';
 import { cn } from './utils';
 import { geminiService } from './services/gemini';
@@ -85,6 +87,9 @@ export default function App() {
   const [pendingDivisionAction, setPendingDivisionAction] = useState<{ parcelId: string, divId: string, type: 'DELETE' | 'EDIT' } | null>(null);
   const [editPercentage, setEditPercentage] = useState<string>('');
   const [showBackupModal, setShowBackupModal] = useState(false);
+  const [showRotationModal, setShowRotationModal] = useState(false);
+  const [selectedParcelForRotation, setSelectedParcelForRotation] = useState<Parcel | null>(null);
+  const [rotationAngle, setRotationAngle] = useState(0);
   
   const [showConvertModal, setShowConvertModal] = useState(false);
   const [selectedParcelForConversion, setSelectedParcelForConversion] = useState<Parcel | null>(null);
@@ -232,6 +237,13 @@ export default function App() {
     if (mode === 'DIVIDE') {
       setSelectedCycle(cycle);
       setShowDivisionModal(true);
+    } else if (mode === 'ROTATE') {
+      const parcelId = cycle.map(p => p.id).sort().join(',');
+      const parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+      if (parcel) {
+        setSelectedParcelForRotation(parcel);
+        setRotationAngle(parcel.angle || 0);
+      }
     } else if (mode === 'MANAGE') {
       const parcelId = cycle.map(p => p.id).sort().join(',');
       let parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
@@ -254,9 +266,16 @@ export default function App() {
     }
   };
 
-  const splitPolygon = (cycle: Point[], percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL'): [number, number][] => {
+  const splitPolygon = (cycle: Point[], percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL', angle: number = 0): [number, number][] => {
     const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
-    const poly = turf.polygon([coords]);
+    let poly = turf.polygon([coords]);
+    const centroid = turf.centroid(poly);
+
+    // Rotate polygon by -angle to align the split line with axes
+    if (angle !== 0) {
+      poly = turf.transformRotate(poly, -angle, { pivot: centroid });
+    }
+
     const bbox = turf.bbox(poly);
     const totalArea = turf.area(poly);
     const targetArea = totalArea * (percentage / 100);
@@ -291,7 +310,7 @@ export default function App() {
         clipPoly = turf.polygon([[[bbox[0], bbox[1]], [bbox[2], bbox[1]], [bbox[2], mid], [bbox[0], mid], [bbox[0], bbox[1]]]]);
       }
 
-      const intersection = turf.intersect(turf.featureCollection([poly, clipPoly]));
+      let intersection = turf.intersect(turf.featureCollection([poly, clipPoly]));
       if (!intersection) {
         min = mid;
         continue;
@@ -302,6 +321,11 @@ export default function App() {
         min = mid;
       } else {
         max = mid;
+      }
+
+      // Rotate back if needed
+      if (angle !== 0) {
+        intersection = turf.transformRotate(intersection, angle, { pivot: centroid });
       }
 
       if (intersection.geometry.type === 'Polygon') {
@@ -335,11 +359,12 @@ export default function App() {
     // then we'd ideally subtract the previous cumulative polygon.
     // For simplicity in this version, we'll just store the cumulative geometry.
     
-    const cumulativeGeometry = splitPolygon(selectedCycle, percentage + currentTotal, orientation);
+    const parcelAngle = existingParcel?.angle || 0;
+    const cumulativeGeometry = splitPolygon(selectedCycle, percentage + currentTotal, orientation, parcelAngle);
     let finalGeometry = cumulativeGeometry;
 
     if (currentTotal > 0) {
-      const previousCumulativeGeometry = splitPolygon(selectedCycle, currentTotal, orientation);
+      const previousCumulativeGeometry = splitPolygon(selectedCycle, currentTotal, orientation, parcelAngle);
       const poly1 = turf.polygon([[...cumulativeGeometry.map(c => [c[1], c[0]]), [cumulativeGeometry[0][1], cumulativeGeometry[0][0]]]]);
       const poly2 = turf.polygon([[...previousCumulativeGeometry.map(c => [c[1], c[0]]), [previousCumulativeGeometry[0][1], previousCumulativeGeometry[0][0]]]]);
       const diff = turf.difference(turf.featureCollection([poly1, poly2]));
@@ -377,6 +402,43 @@ export default function App() {
       setParcels(prev => [...prev, newParcel]);
     }
     setShowDivisionModal(false);
+  };
+
+  const handleUpdateParcelAngle = (parcelId: string, newAngle: number) => {
+    setParcels(prev => prev.map(p => {
+      if (p.id === parcelId) {
+        const parcelPoints = p.pointIds.map(id => points.find(pt => pt.id === id)).filter(Boolean) as Point[];
+        if (parcelPoints.length < 3) return p;
+
+        let currentTotal = 0;
+        const updatedDivisions = p.divisions.map(d => {
+          const cumulativeGeometry = splitPolygon(parcelPoints, d.percentage + currentTotal, d.orientation, newAngle);
+          let finalGeometry = cumulativeGeometry;
+
+          if (currentTotal > 0) {
+            const previousCumulativeGeometry = splitPolygon(parcelPoints, currentTotal, d.orientation, newAngle);
+            const poly1 = turf.polygon([[...cumulativeGeometry.map(c => [c[1], c[0]]), [cumulativeGeometry[0][1], cumulativeGeometry[0][0]]]]);
+            const poly2 = turf.polygon([[...previousCumulativeGeometry.map(c => [c[1], c[0]]), [previousCumulativeGeometry[0][1], previousCumulativeGeometry[0][0]]]]);
+            const diff = turf.difference(turf.featureCollection([poly1, poly2]));
+            
+            if (diff) {
+              if (diff.geometry.type === 'Polygon') {
+                finalGeometry = diff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number]);
+              } else if (diff.geometry.type === 'MultiPolygon') {
+                finalGeometry = diff.geometry.coordinates[0][0].map(c => [c[1], c[0]] as [number, number]);
+              }
+            }
+          }
+          
+          const updatedDiv = { ...d, geometry: finalGeometry };
+          currentTotal += d.percentage;
+          return updatedDiv;
+        });
+
+        return { ...p, angle: newAngle, divisions: updatedDivisions };
+      }
+      return p;
+    }));
   };
 
   const handleAiConsult = async (parcel: Parcel) => {
@@ -619,6 +681,21 @@ export default function App() {
 
            {isAdmin && (
              <div className="flex items-center gap-1">
+               <button 
+                 onClick={() => {
+                   const newMode = mode === 'ROTATE' ? 'VIEW' : 'ROTATE';
+                   setMode(newMode);
+                   setShowRotationModal(newMode === 'ROTATE');
+                 }}
+                 className={cn(
+                   "p-2 rounded-full transition-colors",
+                   mode === 'ROTATE' ? "bg-amber-100 text-amber-600" : "text-slate-500 hover:bg-slate-100"
+                 )}
+                 title="چرخش سهم‌ها"
+               >
+                 <RotateCcw className="w-5 h-5" />
+               </button>
+
                <button 
                  onClick={() => setMode(mode === 'MANAGE' ? 'VIEW' : 'MANAGE')}
                  className={cn(
@@ -1465,6 +1542,23 @@ export default function App() {
           onConvert={handleConvertShare}
         />
       )}
+
+      {/* Rotation Tool Modal */}
+      <RotationModal 
+        isOpen={showRotationModal}
+        onClose={() => {
+          setShowRotationModal(false);
+          if (mode === 'ROTATE') setMode('VIEW');
+        }}
+        angle={rotationAngle}
+        onAngleChange={(newAngle) => {
+          setRotationAngle(newAngle);
+          if (selectedParcelForRotation) {
+            handleUpdateParcelAngle(selectedParcelForRotation.id, newAngle);
+          }
+        }}
+        parcelName={selectedParcelForRotation?.name}
+      />
     </div>
   );
 }

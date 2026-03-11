@@ -40,6 +40,7 @@ export interface Parcel {
   divisions: Division[];
   area: number; // in square meters
   ownerName?: string;
+  angle?: number; // Rotation angle for divisions in degrees
 }
 
-export type AppMode = 'VIEW' | 'RECORD' | 'CONNECT' | 'EDIT' | 'DIVIDE' | 'MANAGE' | 'CONVERT';
+export type AppMode = 'VIEW' | 'RECORD' | 'CONNECT' | 'EDIT' | 'DIVIDE' | 'MANAGE' | 'CONVERT' | 'ROTATE';
