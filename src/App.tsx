@@ -31,7 +31,10 @@ import {
   Search,
   ChevronDown,
   SearchX,
-  ChevronUp
+  ChevronUp,
+  Lock,
+  ShieldCheck,
+  KeyRound
 } from 'lucide-react';
 import * as turf from '@turf/turf';
 import MapView from './components/Map/MapView';
@@ -68,6 +71,11 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isGenMenuOpen, setIsGenMenuOpen] = useState(false);
   const [highlightedParcelId, setHighlightedParcelId] = useState<string | null>(null);
+
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showAdminModal, setShowAdminModal] = useState(false);
+  const [adminPassword, setAdminPassword] = useState('');
+  const [loginError, setLoginError] = useState(false);
 
   const [pendingDeleteConnId, setPendingDeleteConnId] = useState<string | null>(null);
   const [pendingDivisionAction, setPendingDivisionAction] = useState<{ parcelId: string, divId: string, type: 'DELETE' | 'EDIT' } | null>(null);
@@ -560,26 +568,54 @@ export default function App() {
              {isSearchActive ? <SearchX className="w-5 h-5" /> : <Search className="w-5 h-5" />}
            </button>
 
+           <div className="w-px h-6 bg-slate-200 mx-1" />
+
+           {isAdmin ? (
+             <>
+               <button 
+                 onClick={() => setMode(mode === 'MANAGE' ? 'VIEW' : 'MANAGE')}
+                 className={cn(
+                   "p-2 rounded-full transition-colors",
+                   mode === 'MANAGE' ? "bg-indigo-100 text-indigo-600" : "text-slate-500 hover:bg-slate-100"
+                 )}
+                 title="مدیریت مالکین"
+               >
+                 <UserCog className="w-5 h-5" />
+               </button>
+               
+               <button 
+                 onClick={() => setMode(mode === 'DIVIDE' ? 'VIEW' : 'DIVIDE')}
+                 className={cn(
+                   "p-2 rounded-full transition-colors",
+                   mode === 'DIVIDE' ? "bg-blue-100 text-blue-600" : "text-slate-500 hover:bg-slate-100"
+                 )}
+                 title="حالت تقسیم اراضی"
+               >
+                 <Users className="w-5 h-5" />
+               </button>
+             </>
+           ) : (
+             <div className="flex items-center px-2 py-1 bg-slate-50 rounded-lg border border-slate-100">
+               <span className="text-[10px] font-bold text-slate-400">حالت مشاهده</span>
+             </div>
+           )}
+
            <button 
-             onClick={() => setMode(mode === 'MANAGE' ? 'VIEW' : 'MANAGE')}
+             onClick={() => {
+               if (isAdmin) {
+                 setIsAdmin(false);
+                 setMode('VIEW');
+               } else {
+                 setShowAdminModal(true);
+               }
+             }}
              className={cn(
-               "p-2 rounded-full transition-colors",
-               mode === 'MANAGE' ? "bg-indigo-100 text-indigo-600" : "text-slate-500 hover:bg-slate-100"
+               "p-2 rounded-full transition-all duration-300",
+               isAdmin ? "bg-emerald-100 text-emerald-600" : "bg-slate-100 text-slate-400 hover:bg-slate-200"
              )}
-             title="مدیریت مالکین"
+             title={isAdmin ? "خروج از مدیریت" : "ورود مدیر"}
            >
-             <UserCog className="w-5 h-5" />
-           </button>
-           
-           <button 
-             onClick={() => setMode(mode === 'DIVIDE' ? 'VIEW' : 'DIVIDE')}
-             className={cn(
-               "p-2 rounded-full transition-colors",
-               mode === 'DIVIDE' ? "bg-blue-100 text-blue-600" : "text-slate-500 hover:bg-slate-100"
-             )}
-             title="حالت تقسیم اراضی"
-           >
-             <Users className="w-5 h-5" />
+             {isAdmin ? <ShieldCheck className="w-5 h-5" /> : <Lock className="w-5 h-5" />}
            </button>
         </div>
       </header>
@@ -703,13 +739,20 @@ export default function App() {
 
           <div className="bg-white/90 backdrop-blur-md border border-white/20 p-2 rounded-3xl shadow-2xl flex items-center gap-2 max-w-md w-full">
             {!isSearchActive ? (
-              <button 
-                onClick={() => { setIsUpdating(false); setShowRecorder(true); }}
-                className="flex-1 flex items-center justify-center gap-2 py-4 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg shadow-emerald-200 transition-all active:scale-95"
-              >
-                <Crosshair className="w-5 h-5" />
-                ثبت مختصات دقیق
-              </button>
+              isAdmin ? (
+                <button 
+                  onClick={() => { setIsUpdating(false); setShowRecorder(true); }}
+                  className="flex-1 flex items-center justify-center gap-2 py-4 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg shadow-emerald-200 transition-all active:scale-95"
+                >
+                  <Crosshair className="w-5 h-5" />
+                  ثبت مختصات دقیق
+                </button>
+              ) : (
+                <div className="flex-1 flex items-center justify-center gap-2 py-4 bg-slate-100 text-slate-400 rounded-2xl font-bold border border-slate-200/50">
+                  <ShieldCheck className="w-5 h-5 opacity-30" />
+                  فقط مشاهده اراضی
+                </div>
+              )
             ) : (
               <div className="flex-1 flex items-center gap-2 px-4 py-1 bg-slate-100 rounded-2xl border border-slate-200/50">
                 <Search className="w-5 h-5 text-slate-400" />
@@ -1135,6 +1178,95 @@ export default function App() {
                     className="py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
                   >
                     ثبت نام مالک
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Admin Login Modal */}
+      <AnimatePresence>
+        {showAdminModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[5000] flex items-center justify-center p-4" dir="rtl">
+            <motion.div 
+              initial={{ scale: 0.9, y: 20, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.9, y: 20, opacity: 0 }}
+              className="bg-white rounded-[40px] shadow-2xl w-full max-w-md overflow-hidden border border-white/20"
+            >
+              <div className="p-8 text-center bg-gradient-to-b from-slate-50 to-white">
+                <div className="w-20 h-20 bg-indigo-100 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-inner">
+                  <KeyRound className="w-10 h-10 text-indigo-600" />
+                </div>
+                <h2 className="text-2xl font-black text-slate-900 mb-2">ورود به پنل مدیریت</h2>
+                <p className="text-slate-500 text-sm">برای دسترسی به ابزارهای ویرایشی، رمز عبور را وارد کنید</p>
+              </div>
+
+              <div className="p-8 pt-0 space-y-6">
+                <div className="relative">
+                  <input 
+                    type="password"
+                    value={adminPassword}
+                    onChange={(e) => {
+                      setAdminPassword(e.target.value);
+                      setLoginError(false);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        if (adminPassword === 'Alliwali@1264') {
+                          setIsAdmin(true);
+                          setShowAdminModal(false);
+                          setAdminPassword('');
+                        } else {
+                          setLoginError(true);
+                        }
+                      }
+                    }}
+                    className={cn(
+                      "w-full bg-slate-50 border-2 rounded-3xl px-6 py-5 focus:outline-none transition-all text-center text-2xl tracking-[0.5em] font-mono",
+                      loginError ? "border-rose-500 bg-rose-50 text-rose-600" : "border-slate-100 focus:border-indigo-500 text-slate-900"
+                    )}
+                    placeholder="••••••••"
+                    autoFocus
+                  />
+                  {loginError && (
+                    <motion.p 
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="text-rose-500 text-xs font-bold mt-3 text-center"
+                    >
+                      رمز عبور اشتباه است. دوباره تلاش کنید.
+                    </motion.p>
+                  )}
+                </div>
+                
+                <div className="grid grid-cols-1 gap-3">
+                  <button 
+                    onClick={() => {
+                      if (adminPassword === 'Alliwali@1264') {
+                        setIsAdmin(true);
+                        setShowAdminModal(false);
+                        setAdminPassword('');
+                      } else {
+                        setLoginError(true);
+                      }
+                    }}
+                    className="py-5 bg-indigo-600 text-white rounded-[24px] font-bold shadow-xl shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-95 flex items-center justify-center gap-2"
+                  >
+                    <ShieldCheck className="w-5 h-5" />
+                    تایید و ورود
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setShowAdminModal(false);
+                      setAdminPassword('');
+                      setLoginError(false);
+                    }}
+                    className="py-4 text-slate-400 font-bold hover:text-slate-600 transition-colors"
+                  >
+                    انصراف
                   </button>
                 </div>
               </div>

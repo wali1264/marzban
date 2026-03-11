@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, Circle, Polygon, Tooltip, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import * as turf from '@turf/turf';
@@ -116,14 +116,17 @@ function getCentroid(nodes: Point[]): [number, number] {
 function MapController({ 
   centerOn, 
   points,
-  highlightedParcelCenter
+  highlightedParcelCenter,
+  highlightedParcelId
 }: { 
   centerOn?: { lat: number; lng: number }; 
   points: Point[];
   highlightedParcelCenter?: { lat: number; lng: number };
+  highlightedParcelId?: string | null;
 }) {
   const map = useMap();
   const [hasInitialFit, setHasInitialFit] = useState(false);
+  const lastCenteredId = useRef<string | null>(null);
 
   // Initial fit to points - only once
   useEffect(() => {
@@ -134,14 +137,23 @@ function MapController({
     }
   }, [points, map, hasInitialFit]);
 
-  // Manual center on user or highlighted parcel - only when centerTrigger changes
+  // Manual center on user or highlighted parcel
   useEffect(() => {
-    if (highlightedParcelCenter) {
-      map.setView([highlightedParcelCenter.lat, highlightedParcelCenter.lng], 19);
-    } else if (centerOn) {
+    // Only center on parcel if it's a NEW selection
+    if (highlightedParcelId && highlightedParcelId !== lastCenteredId.current && highlightedParcelCenter) {
+      map.setView([highlightedParcelCenter.lat, highlightedParcelCenter.lng], 17);
+      lastCenteredId.current = highlightedParcelId;
+    } else if (!highlightedParcelId && centerOn) {
+      // Manual center trigger (e.g. user location button)
       map.setView([centerOn.lat, centerOn.lng], map.getZoom() > 18 ? map.getZoom() : 18);
+      lastCenteredId.current = null;
     }
-  }, [centerOn, highlightedParcelCenter, map]);
+    
+    // Reset lastCenteredId if search is cleared
+    if (!highlightedParcelId) {
+      lastCenteredId.current = null;
+    }
+  }, [centerOn, highlightedParcelCenter, highlightedParcelId, map]);
 
   return null;
 }
@@ -460,6 +472,7 @@ export default function MapView({
           centerOn={centerTrigger ? (userLocation || undefined) : undefined} 
           points={points}
           highlightedParcelCenter={highlightedParcelCenter || undefined}
+          highlightedParcelId={highlightedParcelId}
         />
         
         {/* Live User Location - Only shown if toggled ON */}
