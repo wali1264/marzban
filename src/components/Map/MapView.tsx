@@ -342,10 +342,26 @@ export default function MapView({
             interactive={false}
           >
             {isVisible && (
-              <>
-                <Tooltip permanent direction="center" className="area-tooltip">
+              <Tooltip permanent direction="center" className="area-tooltip">
+                <div className="relative flex items-center justify-center">
+                  {/* Owner Name Watermark */}
+                  {parcel?.ownerName && (
+                    <div 
+                      className="absolute font-black whitespace-nowrap pointer-events-none select-none transition-all duration-500 text-slate-900"
+                      style={{ 
+                        fontSize: `${finalFontSize}px`,
+                        opacity: ownerOpacity,
+                        transform: `rotate(-15deg)`,
+                        zIndex: 0
+                      }}
+                    >
+                      {parcel.ownerName}
+                    </div>
+                  )}
+                  
+                  {/* Area Card */}
                   <div 
-                    className="flex flex-col items-center bg-white/90 backdrop-blur-sm px-2 py-1 rounded-lg border border-slate-200 shadow-sm transition-all duration-300 pointer-events-none" 
+                    className="relative z-10 flex flex-col items-center bg-white/90 backdrop-blur-sm px-2 py-1 rounded-lg border border-slate-200 shadow-sm transition-all duration-300 pointer-events-none" 
                     dir="rtl"
                     style={{ transform: `scale(${scale})`, opacity: isVisible ? 1 : 0 }}
                   >
@@ -355,23 +371,8 @@ export default function MapView({
                       <span className="text-[8px] text-slate-600 font-bold">متر مربع</span>
                     </div>
                   </div>
-                </Tooltip>
-                
-                {parcel?.ownerName && (
-                  <Tooltip permanent direction="center" className="owner-watermark-tooltip">
-                    <div 
-                      className="font-black whitespace-nowrap pointer-events-none select-none transition-all duration-500 text-slate-900"
-                      style={{ 
-                        fontSize: `${finalFontSize}px`,
-                        opacity: ownerOpacity,
-                        transform: `rotate(-15deg)`
-                      }}
-                    >
-                      {parcel.ownerName}
-                    </div>
-                  </Tooltip>
-                )}
-              </>
+                </div>
+              </Tooltip>
             )}
           </Marker>
 
