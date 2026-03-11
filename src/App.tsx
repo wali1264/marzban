@@ -570,7 +570,7 @@ export default function App() {
 
            <div className="w-px h-6 bg-slate-200 mx-1" />
 
-           {isAdmin ? (
+           {isAdmin && (
              <>
                <button 
                  onClick={() => setMode(mode === 'MANAGE' ? 'VIEW' : 'MANAGE')}
@@ -594,10 +594,6 @@ export default function App() {
                  <Users className="w-5 h-5" />
                </button>
              </>
-           ) : (
-             <div className="flex items-center px-2 py-1 bg-slate-50 rounded-lg border border-slate-100">
-               <span className="text-[10px] font-bold text-slate-400">حالت مشاهده</span>
-             </div>
            )}
 
            <button 
@@ -656,16 +652,19 @@ export default function App() {
           >
             <Navigation className="w-6 h-6" />
           </button>
-          <button 
-            onClick={() => setMode('CONNECT')}
-            className={cn(
-              "p-3 rounded-2xl shadow-xl transition-all",
-              mode === 'CONNECT' ? "bg-emerald-600 text-white" : "bg-white text-slate-600"
-            )}
-            title="حالت اتصال مرزها"
-          >
-            <LinkIcon className="w-6 h-6" />
-          </button>
+          
+          {isAdmin && (
+            <button 
+              onClick={() => setMode('CONNECT')}
+              className={cn(
+                "p-3 rounded-2xl shadow-xl transition-all",
+                mode === 'CONNECT' ? "bg-emerald-600 text-white" : "bg-white text-slate-600"
+              )}
+              title="حالت اتصال مرزها"
+            >
+              <LinkIcon className="w-6 h-6" />
+            </button>
+          )}
           
           <div className="h-px bg-slate-200 my-1" />
 
@@ -737,9 +736,12 @@ export default function App() {
             )}
           </AnimatePresence>
 
-          <div className="bg-white/90 backdrop-blur-md border border-white/20 p-2 rounded-3xl shadow-2xl flex items-center gap-2 max-w-md w-full">
+          <div className={cn(
+            "bg-white/90 backdrop-blur-md border border-white/20 p-2 rounded-3xl shadow-2xl flex items-center gap-2 transition-all duration-500",
+            (!isSearchActive && !isAdmin) ? "w-fit px-4" : "max-w-md w-full"
+          )}>
             {!isSearchActive ? (
-              isAdmin ? (
+              isAdmin && (
                 <button 
                   onClick={() => { setIsUpdating(false); setShowRecorder(true); }}
                   className="flex-1 flex items-center justify-center gap-2 py-4 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg shadow-emerald-200 transition-all active:scale-95"
@@ -747,11 +749,6 @@ export default function App() {
                   <Crosshair className="w-5 h-5" />
                   ثبت مختصات دقیق
                 </button>
-              ) : (
-                <div className="flex-1 flex items-center justify-center gap-2 py-4 bg-slate-100 text-slate-400 rounded-2xl font-bold border border-slate-200/50">
-                  <ShieldCheck className="w-5 h-5 opacity-30" />
-                  فقط مشاهده اراضی
-                </div>
               )
             ) : (
               <div className="flex-1 flex items-center gap-2 px-4 py-1 bg-slate-100 rounded-2xl border border-slate-200/50">
@@ -822,22 +819,24 @@ export default function App() {
                 <span className="text-[10px] text-slate-400">{new Date(selectedPoint.timestamp).toLocaleString('fa-IR')}</span>
               </div>
               
-              <div className="grid grid-cols-2 gap-3">
-                <button 
-                  onClick={() => deletePoint(selectedPoint.id)}
-                  className="flex items-center justify-center gap-2 py-4 bg-rose-50 text-rose-600 rounded-2xl font-bold hover:bg-rose-100 transition-colors"
-                >
-                  <Trash2 className="w-5 h-5" />
-                  حذف
-                </button>
-                <button 
-                  onClick={startUpdate}
-                  className="flex items-center justify-center gap-2 py-4 bg-amber-50 text-amber-600 rounded-2xl font-bold hover:bg-amber-100 transition-colors"
-                >
-                  <RefreshCw className="w-5 h-5" />
-                  بروزرسانی
-                </button>
-              </div>
+              {isAdmin && (
+                <div className="grid grid-cols-2 gap-3">
+                  <button 
+                    onClick={() => deletePoint(selectedPoint.id)}
+                    className="flex items-center justify-center gap-2 py-4 bg-rose-50 text-rose-600 rounded-2xl font-bold hover:bg-rose-100 transition-colors"
+                  >
+                    <Trash2 className="w-5 h-5" />
+                    حذف
+                  </button>
+                  <button 
+                    onClick={startUpdate}
+                    className="flex items-center justify-center gap-2 py-4 bg-amber-50 text-amber-600 rounded-2xl font-bold hover:bg-amber-100 transition-colors"
+                  >
+                    <RefreshCw className="w-5 h-5" />
+                    بروزرسانی
+                  </button>
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
