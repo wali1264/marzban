@@ -35,12 +35,14 @@ import {
   Lock,
   ShieldCheck,
   KeyRound,
-  Database
+  Database,
+  Zap
 } from 'lucide-react';
 import * as turf from '@turf/turf';
 import MapView from './components/Map/MapView';
 import PrecisionRecorder from './components/Recorder/PrecisionRecorder';
 import BackupModal from './components/Backup/BackupModal';
+import ConvertModal from './components/Convert/ConvertModal';
 import { Point, Connection, AppMode, Parcel, Partner, Division } from './types';
 import { cn } from './utils';
 import { geminiService } from './services/gemini';
@@ -83,6 +85,10 @@ export default function App() {
   const [pendingDivisionAction, setPendingDivisionAction] = useState<{ parcelId: string, divId: string, type: 'DELETE' | 'EDIT' } | null>(null);
   const [editPercentage, setEditPercentage] = useState<string>('');
   const [showBackupModal, setShowBackupModal] = useState(false);
+  
+  const [showConvertModal, setShowConvertModal] = useState(false);
+  const [selectedParcelForConversion, setSelectedParcelForConversion] = useState<Parcel | null>(null);
+  const [selectedDivisionForConversion, setSelectedDivisionForConversion] = useState<Division | null>(null);
 
   // Load from local storage on mount
   useEffect(() => {
@@ -497,6 +503,42 @@ export default function App() {
     setParcels(data.parcels);
   };
 
+  const handleConvertShare = (newPoints: Point[], newParcel: Parcel) => {
+    // Add new points
+    setPoints(prev => [...prev, ...newPoints]);
+    
+    // Create connections for the new parcel
+    const newConnections: Connection[] = [];
+    for (let i = 0; i < newParcel.pointIds.length; i++) {
+      const fromId = newParcel.pointIds[i];
+      const toId = newParcel.pointIds[(i + 1) % newParcel.pointIds.length];
+      newConnections.push({
+        id: Math.random().toString(36).substr(2, 9),
+        fromId,
+        toId
+      });
+    }
+    setConnections(prev => [...prev, ...newConnections]);
+    
+    // Add new parcel
+    setParcels(prev => [...prev, newParcel]);
+    
+    // Remove the division from the original parcel
+    if (selectedParcelForConversion && selectedDivisionForConversion) {
+      setParcels(prev => prev.map(p => {
+        if (p.id === selectedParcelForConversion.id) {
+          return {
+            ...p,
+            divisions: p.divisions.filter(d => d.id !== selectedDivisionForConversion.id)
+          };
+        }
+        return p;
+      }));
+    }
+    
+    setMode('VIEW');
+  };
+
   const startUpdate = () => {
     setIsUpdating(true);
     setShowRecorder(true);
@@ -635,6 +677,15 @@ export default function App() {
           onConnectionClick={handleConnectionClick}
           onConnectionLongPress={(id) => mode === 'CONNECT' && setPendingDeleteConnId(id)}
           onPolygonClick={handlePolygonClick}
+          onDivisionClick={(pId, dId) => {
+            const parcel = parcels.find(p => p.id === pId);
+            const division = parcel?.divisions.find(d => d.id === dId);
+            if (parcel && division) {
+              setSelectedParcelForConversion(parcel);
+              setSelectedDivisionForConversion(division);
+              setShowConvertModal(true);
+            }
+          }}
           onDivisionLongPress={(pId, dId) => setPendingDivisionAction({ parcelId: pId, divId: dId, type: 'DELETE' })}
           userLocation={userLocation}
           showUserLocation={showUserLocation}
@@ -659,16 +710,28 @@ export default function App() {
           </button>
           
           {isAdmin && (
-            <button 
-              onClick={() => setMode('CONNECT')}
-              className={cn(
-                "p-3 rounded-2xl shadow-xl transition-all",
-                mode === 'CONNECT' ? "bg-emerald-600 text-white" : "bg-white text-slate-600"
-              )}
-              title="حالت اتصال مرزها"
-            >
-              <LinkIcon className="w-6 h-6" />
-            </button>
+            <>
+              <button 
+                onClick={() => setMode('CONNECT')}
+                className={cn(
+                  "p-3 rounded-2xl shadow-xl transition-all",
+                  mode === 'CONNECT' ? "bg-emerald-600 text-white" : "bg-white text-slate-600"
+                )}
+                title="حالت اتصال مرزها"
+              >
+                <LinkIcon className="w-6 h-6" />
+              </button>
+              <button 
+                onClick={() => setMode('CONVERT')}
+                className={cn(
+                  "p-3 rounded-2xl shadow-xl transition-all",
+                  mode === 'CONVERT' ? "bg-emerald-600 text-white" : "bg-white text-slate-600"
+                )}
+                title="حالت تبدیل سهم"
+              >
+                <Zap className="w-6 h-6" />
+              </button>
+            </>
           )}
           
           <div className="h-px bg-slate-200 my-1" />
@@ -1390,6 +1453,18 @@ export default function App() {
         parcels={parcels}
         onRestore={handleRestore}
       />
+
+      {/* Convert Share Modal */}
+      {selectedParcelForConversion && selectedDivisionForConversion && (
+        <ConvertModal
+          isOpen={showConvertModal}
+          onClose={() => setShowConvertModal(false)}
+          parcel={selectedParcelForConversion}
+          division={selectedDivisionForConversion}
+          points={points}
+          onConvert={handleConvertShare}
+        />
+      )}
     </div>
   );
 }

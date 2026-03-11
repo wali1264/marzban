@@ -26,6 +26,7 @@ interface MapViewProps {
   onConnectionClick: (connectionId: string) => void;
   onConnectionLongPress?: (connectionId: string) => void;
   onPolygonClick?: (points: Point[]) => void;
+  onDivisionClick?: (parcelId: string, divisionId: string) => void;
   onDivisionLongPress?: (parcelId: string, divisionId: string) => void;
   userLocation?: { lat: number; lng: number; accuracy: number };
   showUserLocation: boolean;
@@ -179,6 +180,7 @@ export default function MapView({
   onConnectionClick,
   onConnectionLongPress,
   onPolygonClick,
+  onDivisionClick,
   onDivisionLongPress,
   userLocation,
   showUserLocation,
@@ -416,6 +418,12 @@ export default function MapView({
                   dashArray: '5, 5'
                 }}
                 eventHandlers={{
+                  click: (e) => {
+                    if (mode === 'CONVERT' && onDivisionClick && parcel) {
+                      L.DomEvent.stopPropagation(e);
+                      onDivisionClick(parcel.id, div.id);
+                    }
+                  },
                   mousedown: () => handleLongPressStart(() => parcel && onDivisionLongPress?.(parcel.id, div.id)),
                   mouseup: handleLongPressEnd,
                   touchstart: () => handleLongPressStart(() => parcel && onDivisionLongPress?.(parcel.id, div.id)),
