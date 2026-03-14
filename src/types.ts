@@ -41,6 +41,7 @@ export interface Parcel {
   area: number; // in square meters
   ownerName?: string;
   angle?: number; // Rotation angle for divisions in degrees
+  generation?: number; // 1 for root, 2 for nested, etc.
 }
 
 export type AppMode = 'VIEW' | 'RECORD' | 'CONNECT' | 'EDIT' | 'DIVIDE' | 'MANAGE' | 'CONVERT' | 'ROTATE';

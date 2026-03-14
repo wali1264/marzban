@@ -220,26 +220,31 @@ export default function MapView({
     });
 
     return polys.map(item => {
-      let gen = 1;
-      // Check if this poly is inside any other poly
-      for (const other of polys) {
-        if (item === other) continue;
-        if (turf.booleanContains(other.poly, item.poly)) {
-          gen = 2;
-          // Check if the container is also inside something
-          for (const third of polys) {
-            if (third === other || third === item) continue;
-            if (turf.booleanContains(third.poly, other.poly)) {
-              gen = 3;
-              break;
+      const parcelId = item.cycle.map(p => p.id).sort().join(',');
+      const existingParcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+      
+      let gen = existingParcel?.generation || 1;
+      
+      if (!existingParcel?.generation) {
+        // Fallback to containment logic if generation not explicitly set
+        for (const other of polys) {
+          if (item === other) continue;
+          if (turf.booleanContains(other.poly, item.poly)) {
+            gen = 2;
+            for (const third of polys) {
+              if (third === other || third === item) continue;
+              if (turf.booleanContains(third.poly, other.poly)) {
+                gen = 3;
+                break;
+              }
             }
+            if (gen === 2) break;
           }
-          if (gen === 2) break; // Found level 2, keep looking if it might be 3
         }
       }
-      return { ...item, gen };
+      return { ...item, gen, layerId: `layer-gen-${gen}` };
     });
-  }, [cycles, connections]);
+  }, [cycles, connections, parcels]);
 
   const visibleConnectionIds = useMemo(() => {
     const ids = new Set<string>();
@@ -353,7 +358,7 @@ export default function MapView({
             }}
             eventHandlers={{
               click: (e) => {
-                if ((mode === 'DIVIDE' || mode === 'MANAGE') && onPolygonClick) {
+                if ((mode === 'DIVIDE' || mode === 'MANAGE' || mode === 'ROTATE') && onPolygonClick) {
                   L.DomEvent.stopPropagation(e);
                   onPolygonClick(cycle);
                 }

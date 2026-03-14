@@ -552,35 +552,46 @@ export default function App() {
     // Add new points
     setPoints(prev => [...prev, ...newPoints]);
     
-    // Create connections for the new parcel
-    const newConnections: Connection[] = [];
-    for (let i = 0; i < newParcel.pointIds.length; i++) {
-      const fromId = newParcel.pointIds[i];
-      const toId = newParcel.pointIds[(i + 1) % newParcel.pointIds.length];
-      newConnections.push({
-        id: Math.random().toString(36).substr(2, 9),
-        fromId,
-        toId
-      });
-    }
-    setConnections(prev => [...prev, ...newConnections]);
+    // Create connections for the new parcel, avoiding duplicates
+    setConnections(prev => {
+      const updated = [...prev];
+      for (let i = 0; i < newParcel.pointIds.length; i++) {
+        const fromId = newParcel.pointIds[i];
+        const toId = newParcel.pointIds[(i + 1) % newParcel.pointIds.length];
+        
+        const exists = updated.some(c => 
+          (c.fromId === fromId && c.toId === toId) || 
+          (c.fromId === toId && c.toId === fromId)
+        );
+        
+        if (!exists) {
+          updated.push({
+            id: Math.random().toString(36).substr(2, 9),
+            fromId,
+            toId
+          });
+        }
+      }
+      return updated;
+    });
     
-    // Add new parcel
-    setParcels(prev => [...prev, newParcel]);
-    
-    // Remove the division from the original parcel
-    if (selectedParcelForConversion && selectedDivisionForConversion) {
-      setParcels(prev => prev.map(p => {
-        if (p.id === selectedParcelForConversion.id) {
+    // Add new parcel and remove the division from the original
+    setParcels(prev => {
+      const updatedParcels = prev.map(p => {
+        if (selectedParcelForConversion && p.id === selectedParcelForConversion.id && selectedDivisionForConversion) {
           return {
             ...p,
             divisions: p.divisions.filter(d => d.id !== selectedDivisionForConversion.id)
           };
         }
         return p;
-      }));
-    }
+      });
+      return [...updatedParcels, newParcel];
+    });
     
+    setShowConvertModal(false);
+    setSelectedParcelForConversion(null);
+    setSelectedDivisionForConversion(null);
     setMode('VIEW');
   };
 

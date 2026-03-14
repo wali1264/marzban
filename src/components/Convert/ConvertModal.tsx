@@ -39,7 +39,7 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
         const existingPoint = points.find(p => {
           const distance = turf.distance(
             turf.point([p.lng, p.lat]),
-            turf.point([coord[0], coord[1]]),
+            turf.point([coord[1], coord[0]]), // coord is [lat, lng]
             { units: 'meters' }
           );
           return distance < 0.01; // 1cm threshold
@@ -51,8 +51,8 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
           const newId = Math.random().toString(36).substr(2, 9);
           const newPoint: Point = {
             id: newId,
-            lng: coord[0],
-            lat: coord[1],
+            lng: coord[1],
+            lat: coord[0],
             timestamp: Date.now(),
             accuracy: 0.1 // High precision generated point
           };
@@ -61,13 +61,15 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
         }
       });
 
+      const lngLatCoords = division.geometry.map(c => [c[1], c[0]]);
       const newParcel: Parcel = {
         id: Math.random().toString(36).substr(2, 9),
         name: `قطعه تفکیکی از ${parcel.ownerName || 'زمین اصلی'}`,
         pointIds: newPointIds,
         divisions: [],
-        area: turf.area(turf.polygon([division.geometry])),
-        ownerName: parcel.ownerName // Carry over owner if exists
+        area: turf.area(turf.polygon([lngLatCoords])),
+        ownerName: parcel.ownerName, // Carry over owner if exists
+        generation: (parcel.generation || 1) + 1
       };
 
       onConvert(newPoints, newParcel);
@@ -106,7 +108,7 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-500">مساحت سهم:</span>
                   <span className="font-bold text-slate-900">
-                    {Math.round(turf.area(turf.polygon([division.geometry]))).toLocaleString()} متر مربع
+                    {Math.round(turf.area(turf.polygon([division.geometry.map(c => [c[1], c[0]])]))).toLocaleString()} متر مربع
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
