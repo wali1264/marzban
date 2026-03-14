@@ -22,8 +22,6 @@ export const RotationModal: React.FC<RotationModalProps> = ({
   const dialRef = useRef<HTMLDivElement>(null);
   const dragControls = useDragControls();
 
-  if (!isOpen) return null;
-
   const handleDialInteraction = (e: React.MouseEvent | React.TouchEvent | MouseEvent | TouchEvent) => {
     if (!dialRef.current) return;
 
@@ -88,6 +86,8 @@ export const RotationModal: React.FC<RotationModalProps> = ({
       window.removeEventListener('touchend', handleUp);
     };
   }, [isDragging]);
+
+  if (!isOpen) return null;
 
   return (
     <motion.div
