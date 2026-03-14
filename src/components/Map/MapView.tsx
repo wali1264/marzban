@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, Circle, Polygon, Tooltip, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { Point, Connection, AppMode, Parcel, GenerationMode } from '../../types';
+import * as turf from '@turf/turf';
+import { Point, Connection, AppMode, Parcel } from '../../types';
 import { MapPin, Navigation, Target, Users } from 'lucide-react';
 
 // Fix for default marker icons in Leaflet with React
@@ -23,16 +24,17 @@ interface MapViewProps {
   onPointClick: (point: Point) => void;
   onMapClick: (lat: number, lng: number) => void;
   onConnectionClick: (connectionId: string) => void;
+  onConnectionLongPress?: (connectionId: string) => void;
   onPolygonClick?: (points: Point[]) => void;
+  onDivisionClick?: (parcelId: string, divisionId: string) => void;
+  onDivisionLongPress?: (parcelId: string, divisionId: string) => void;
   userLocation?: { lat: number; lng: number; accuracy: number };
   showUserLocation: boolean;
   selectedPointId: string | null;
-  centerTrigger?: number;
+  centerTrigger?: number; // Used to trigger centering
   parcels?: Parcel[];
-  currentGeneration: GenerationMode;
-  onPointLongPress?: (pointId: string) => void;
-  onLineLongPress?: (connId: string) => void;
-  onParcelUpdate?: (parcelId: string, updates: Partial<Parcel>) => void;
+  generationFilter?: number;
+  highlightedParcelId?: string | null;
 }
 
 // Find all simple cycles in the graph of connections
@@ -114,13 +116,18 @@ function getCentroid(nodes: Point[]): [number, number] {
 
 function MapController({ 
   centerOn, 
-  points 
+  points,
+  highlightedParcelCenter,
+  highlightedParcelId
 }: { 
   centerOn?: { lat: number; lng: number }; 
-  points: Point[] 
+  points: Point[];
+  highlightedParcelCenter?: { lat: number; lng: number };
+  highlightedParcelId?: string | null;
 }) {
   const map = useMap();
   const [hasInitialFit, setHasInitialFit] = useState(false);
+  const lastCenteredId = useRef<string | null>(null);
 
   // Initial fit to points - only once
   useEffect(() => {
@@ -131,12 +138,23 @@ function MapController({
     }
   }, [points, map, hasInitialFit]);
 
-  // Manual center on user - only when centerTrigger changes
+  // Manual center on user or highlighted parcel
   useEffect(() => {
-    if (centerOn) {
+    // Only center on parcel if it's a NEW selection
+    if (highlightedParcelId && highlightedParcelId !== lastCenteredId.current && highlightedParcelCenter) {
+      map.setView([highlightedParcelCenter.lat, highlightedParcelCenter.lng], 17);
+      lastCenteredId.current = highlightedParcelId;
+    } else if (!highlightedParcelId && centerOn) {
+      // Manual center trigger (e.g. user location button)
       map.setView([centerOn.lat, centerOn.lng], map.getZoom() > 18 ? map.getZoom() : 18);
+      lastCenteredId.current = null;
     }
-  }, [centerOn, map]);
+    
+    // Reset lastCenteredId if search is cleared
+    if (!highlightedParcelId) {
+      lastCenteredId.current = null;
+    }
+  }, [centerOn, highlightedParcelCenter, highlightedParcelId, map]);
 
   return null;
 }
@@ -160,48 +178,107 @@ export default function MapView({
   onPointClick, 
   onMapClick,
   onConnectionClick,
+  onConnectionLongPress,
   onPolygonClick,
+  onDivisionClick,
+  onDivisionLongPress,
   userLocation,
   showUserLocation,
   selectedPointId,
   centerTrigger,
   parcels = [],
-  currentGeneration,
-  onPointLongPress,
-  onLineLongPress,
-  onParcelUpdate
+  generationFilter = 1,
+  highlightedParcelId = null
 }: MapViewProps) {
   
-  const filteredPoints = points.filter(p => (p.generation || 1) === currentGeneration);
-  const filteredConnections = connections.filter(c => (c.generation || 1) === currentGeneration);
-  const filteredParcels = parcels.filter(p => p.generation === currentGeneration);
-
-  const cycles = findCycles(filteredPoints, filteredConnections);
+  const cycles = findCycles(points, connections);
   const [zoom, setZoom] = useState(13);
-  const [longPressTimer, setLongPressTimer] = useState<NodeJS.Timeout | null>(null);
+  const longPressTimer = React.useRef<NodeJS.Timeout | null>(null);
 
-  const handleLongPressStart = (callback: () => void) => {
-    const timer = setTimeout(callback, 500);
-    setLongPressTimer(timer);
+  // Calculate generations for each cycle/parcel
+  const cyclesWithGen = useMemo(() => {
+    const polys = cycles.map(cycle => {
+      const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
+      return { 
+        cycle, 
+        poly: turf.polygon([coords as any]),
+        connectionIds: new Set<string>()
+      };
+    });
+
+    // Map connections to their IDs for easy lookup
+    polys.forEach(item => {
+      for (let i = 0; i < item.cycle.length; i++) {
+        const p1 = item.cycle[i];
+        const p2 = item.cycle[(i + 1) % item.cycle.length];
+        const conn = connections.find(c => 
+          (c.fromId === p1.id && c.toId === p2.id) || 
+          (c.fromId === p2.id && c.toId === p1.id)
+        );
+        if (conn) item.connectionIds.add(conn.id);
+      }
+    });
+
+    return polys.map(item => {
+      let gen = 1;
+      // Check if this poly is inside any other poly
+      for (const other of polys) {
+        if (item === other) continue;
+        if (turf.booleanContains(other.poly, item.poly)) {
+          gen = 2;
+          // Check if the container is also inside something
+          for (const third of polys) {
+            if (third === other || third === item) continue;
+            if (turf.booleanContains(third.poly, other.poly)) {
+              gen = 3;
+              break;
+            }
+          }
+          if (gen === 2) break; // Found level 2, keep looking if it might be 3
+        }
+      }
+      return { ...item, gen };
+    });
+  }, [cycles, connections]);
+
+  const visibleConnectionIds = useMemo(() => {
+    const ids = new Set<string>();
+    cyclesWithGen.forEach(item => {
+      if (item.gen === generationFilter) {
+        item.connectionIds.forEach(id => ids.add(id));
+      }
+    });
+    return ids;
+  }, [cyclesWithGen, generationFilter]);
+
+  const handleLongPressStart = (callback?: () => void) => {
+    if (!callback) return;
+    longPressTimer.current = setTimeout(() => {
+      callback();
+      longPressTimer.current = null;
+    }, 500);
   };
 
   const handleLongPressEnd = () => {
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-      setLongPressTimer(null);
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
     }
   };
 
   const renderConnections = () => {
-    return filteredConnections.map(conn => {
-      const from = filteredPoints.find(p => p.id === conn.fromId);
-      const to = filteredPoints.find(p => p.id === conn.toId);
+    return connections.map(conn => {
+      // Filter connections based on generation
+      if (!visibleConnectionIds.has(conn.id) && mode !== 'CONNECT') return null;
+
+      const from = points.find(p => p.id === conn.fromId);
+      const to = points.find(p => p.id === conn.toId);
       if (from && to) {
         return (
           <Polyline 
             key={conn.id} 
             positions={[[from.lat, from.lng], [to.lat, to.lng]]} 
-            color="#10b981" 
+            color={mode === 'CONNECT' ? "#10b981" : generationFilter === 1 ? '#10b981' : generationFilter === 2 ? '#6366f1' : '#f59e0b'} 
             weight={6}
             opacity={0.6}
             eventHandlers={{
@@ -209,10 +286,14 @@ export default function MapView({
                 L.DomEvent.stopPropagation(e);
                 onConnectionClick(conn.id);
               },
-              mousedown: () => handleLongPressStart(() => onLineLongPress?.(conn.id)),
+              mousedown: () => handleLongPressStart(() => onConnectionLongPress?.(conn.id)),
               mouseup: handleLongPressEnd,
-              touchstart: () => handleLongPressStart(() => onLineLongPress?.(conn.id)),
-              touchend: handleLongPressEnd
+              touchstart: () => handleLongPressStart(() => onConnectionLongPress?.(conn.id)),
+              touchend: handleLongPressEnd,
+              contextmenu: (e) => {
+                L.DomEvent.stopPropagation(e);
+                onConnectionLongPress?.(conn.id);
+              }
             }}
           />
         );
@@ -221,55 +302,58 @@ export default function MapView({
     });
   };
 
+  const transparentIcon = useMemo(() => L.divIcon({
+    className: 'bg-transparent',
+    html: '',
+    iconSize: [0, 0],
+    iconAnchor: [0, 0]
+  }), []);
+
   const renderPolygons = () => {
-    return cycles.map((cycle, idx) => {
-      const area = calculatePolygonArea(cycle);
-      const centroid = getCentroid(cycle);
-      const cycleIds = cycle.map(pt => pt.id).sort().join(',');
-      const parcel = filteredParcels.find(p => p.pointIds.sort().join(',') === cycleIds);
+    return cyclesWithGen.map((item, idx) => {
+      const { cycle, gen, poly } = item;
       
-      // Responsive visibility logic
-      const isVisible = zoom > 14;
-      const scale = Math.max(0.2, Math.min(1, (zoom - 13) / 5));
-      const opacity = Math.max(0, Math.min(1, (zoom - 14) * 2));
+      // Strict generation filtering
+      if (gen !== generationFilter) return null;
+
+      const area = calculatePolygonArea(cycle);
+      
+      const parcelId = cycle.map(p => p.id).sort().join(',');
+      const parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+
+      // Visibility logic based on zoom
+      const isVisible = zoom > 15;
+      const scale = Math.max(0.5, Math.min(1, (zoom - 14) / 4));
+
+      // If a parcel is highlighted, only show its details
+      const shouldShowDetails = !highlightedParcelId || highlightedParcelId === parcel?.id;
+      
+      // Calculate centroid for precise positioning
+      const centroid = turf.centroid(poly);
+      const [centerLng, centerLat] = centroid.geometry.coordinates;
+
+      // Zoom-based scaling for owner name
+      const baseFontSize = Math.max(16, Math.sqrt(area) / 3);
+      const zoomScale = Math.pow(1.15, zoom - 18);
+      const finalFontSize = baseFontSize * zoomScale;
+      const ownerOpacity = Math.min(0.25, Math.max(0, (zoom - 15) * 0.08));
+
+      const isHighlighted = highlightedParcelId === parcel?.id;
 
       return (
         <React.Fragment key={`cycle-group-${idx}`}>
-          {/* Watermark Name */}
-          {parcel && (
-            <Marker
-              position={centroid}
-              interactive={false}
-              icon={L.divIcon({
-                className: 'watermark-icon',
-                html: `<div style="
-                  opacity: ${opacity * 0.15};
-                  transform: scale(${scale * 2});
-                  font-family: serif;
-                  font-weight: 900;
-                  white-space: nowrap;
-                  color: #000;
-                  pointer-events: none;
-                  text-transform: uppercase;
-                  letter-spacing: 0.1em;
-                ">${parcel.name}</div>`,
-                iconSize: [0, 0],
-                iconAnchor: [0, 0]
-              })}
-            />
-          )}
-
           <Polygon 
             positions={cycle.map(p => [p.lat, p.lng])}
             pathOptions={{
-              color: '#10b981',
-              fillColor: '#10b981',
-              fillOpacity: 0.1,
-              weight: 0
+              color: isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b'),
+              fillColor: isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b'),
+              fillOpacity: isHighlighted ? 0.3 : 0.1,
+              weight: isHighlighted ? 4 : 2,
+              dashArray: isHighlighted ? '10, 10' : undefined
             }}
             eventHandlers={{
               click: (e) => {
-                if (mode === 'DIVIDE' && onPolygonClick) {
+                if ((mode === 'DIVIDE' || mode === 'MANAGE') && onPolygonClick) {
                   L.DomEvent.stopPropagation(e);
                   onPolygonClick(cycle);
                 }
@@ -277,76 +361,106 @@ export default function MapView({
             }}
           />
 
-          {/* Draggable Area Card */}
-          {isVisible && (
-            <Marker
-              position={centroid}
-              draggable={true}
-              eventHandlers={{
-                dragend: (e) => {
-                  // In a real app, we'd save the offset. 
-                  // For now, we just let Leaflet handle the visual position.
-                }
-              }}
-              icon={L.divIcon({
-                className: 'area-card-icon',
-                html: `<div 
-                  class="flex flex-col items-center bg-white/95 backdrop-blur-md px-4 py-2 rounded-2xl border border-emerald-100 shadow-2xl transition-all duration-500" 
-                  dir="rtl"
-                  style="transform: scale(${scale}); opacity: ${opacity}; min-width: 100px;"
-                >
-                  <span class="text-[10px] text-slate-400 font-bold mb-1">گزارش مساحت</span>
-                  <div class="flex items-baseline gap-1">
-                    <span class="text-lg font-mono font-black text-emerald-700">${area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</span>
-                    <span class="text-[10px] text-emerald-600 font-bold">متر مربع</span>
+          {/* Centered Marker for Tooltips (Area Card & Owner Name) */}
+          <Marker 
+            position={[centerLat, centerLng]} 
+            icon={transparentIcon}
+            interactive={false}
+          >
+            {isVisible && shouldShowDetails && (
+              <Tooltip permanent direction="center" className="area-tooltip">
+                <div className="relative flex items-center justify-center">
+                  {/* Owner Name Watermark */}
+                  {parcel?.ownerName && (
+                    <div 
+                      className="absolute font-black whitespace-nowrap pointer-events-none select-none transition-all duration-500 text-slate-900"
+                      style={{ 
+                        fontSize: `${finalFontSize}px`,
+                        opacity: ownerOpacity,
+                        transform: `rotate(-15deg)`,
+                        zIndex: 0
+                      }}
+                    >
+                      {parcel.ownerName}
+                    </div>
+                  )}
+                  
+                  {/* Area Card */}
+                  <div 
+                    className="relative z-10 flex flex-col items-center bg-white/90 backdrop-blur-sm px-2 py-1 rounded-lg border border-slate-200 shadow-sm transition-all duration-300 pointer-events-none" 
+                    dir="rtl"
+                    style={{ transform: `scale(${scale})`, opacity: isVisible ? 1 : 0 }}
+                  >
+                    <span className="text-[10px] text-slate-500 font-bold">مساحت قطعه</span>
+                    <div className="flex items-baseline gap-0.5">
+                      <span className="text-sm font-mono font-bold text-slate-700">{area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</span>
+                      <span className="text-[8px] text-slate-600 font-bold">متر مربع</span>
+                    </div>
                   </div>
-                </div>`,
-                iconSize: [120, 60],
-                iconAnchor: [60, 30]
-              })}
-            />
-          )}
+                </div>
+              </Tooltip>
+            )}
+          </Marker>
 
           {/* Render Divisions if any */}
-          {parcel?.divisions.map(div => {
-            const divCentroid = getCentroid(div.geometry.map(g => ({ lat: g[0], lng: g[1] } as Point)));
+          {parcels.find(p => {
+            const cycleIds = cycle.map(pt => pt.id).sort().join(',');
+            const parcelIds = p.pointIds.sort().join(',');
+            return cycleIds === parcelIds;
+          })?.divisions.map(div => {
+            const parcel = parcels.find(p => p.pointIds.sort().join(',') === cycle.map(pt => pt.id).sort().join(','));
             return (
-              <React.Fragment key={div.id}>
-                <Polygon
-                  positions={div.geometry}
-                  pathOptions={{
-                    color: '#0ea5e9',
-                    fillColor: '#0ea5e9',
-                    fillOpacity: 0.2,
-                    weight: 2,
-                    dashArray: '5, 5'
-                  }}
-                />
-                {isVisible && (
-                  <Marker
-                    position={divCentroid}
-                    draggable={true}
-                    icon={L.divIcon({
-                      className: 'division-card-icon',
-                      html: `<div 
-                        class="bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-xl border border-blue-100 shadow-xl transition-all duration-500 flex flex-col items-center"
-                        style="transform: scale(${scale * 0.9}); opacity: ${opacity};"
-                      >
-                        <span class="text-[8px] text-slate-400 font-bold">${div.partnerId}</span>
-                        <span class="text-xs font-black text-blue-700">${div.percentage}%</span>
-                      </div>`,
-                      iconSize: [60, 40],
-                      iconAnchor: [30, 20]
-                    })}
-                  />
-                )}
-              </React.Fragment>
+              <Polygon
+                key={div.id}
+                positions={div.geometry}
+                pathOptions={{
+                  color: '#0ea5e9',
+                  fillColor: '#0ea5e9',
+                  fillOpacity: 0.2,
+                  weight: 2,
+                  dashArray: '5, 5'
+                }}
+                eventHandlers={{
+                  click: (e) => {
+                    if (mode === 'CONVERT' && onDivisionClick && parcel) {
+                      L.DomEvent.stopPropagation(e);
+                      onDivisionClick(parcel.id, div.id);
+                    }
+                  },
+                  mousedown: () => handleLongPressStart(() => parcel && onDivisionLongPress?.(parcel.id, div.id)),
+                  mouseup: handleLongPressEnd,
+                  touchstart: () => handleLongPressStart(() => parcel && onDivisionLongPress?.(parcel.id, div.id)),
+                  touchend: handleLongPressEnd,
+                  contextmenu: (e) => {
+                    L.DomEvent.stopPropagation(e);
+                    parcel && onDivisionLongPress?.(parcel.id, div.id);
+                  }
+                }}
+              >
+                 <Tooltip permanent direction="center">
+                  <div className="bg-white/80 px-1 rounded text-[8px] font-bold text-blue-700">
+                    {div.percentage}%
+                  </div>
+                </Tooltip>
+              </Polygon>
             );
           })}
         </React.Fragment>
       );
     });
   };
+
+  const highlightedParcelCenter = useMemo(() => {
+    if (!highlightedParcelId) return null;
+    const item = cyclesWithGen.find(c => {
+      const parcelId = c.cycle.map(p => p.id).sort().join(',');
+      const parcel = parcels?.find(p => p.pointIds.sort().join(',') === parcelId);
+      return parcel?.id === highlightedParcelId;
+    });
+    if (!item) return null;
+    const centroid = turf.centroid(item.poly);
+    return { lat: centroid.geometry.coordinates[1], lng: centroid.geometry.coordinates[0] };
+  }, [highlightedParcelId, cyclesWithGen, parcels]);
 
   return (
     <div className="relative w-full h-full">
@@ -367,7 +481,9 @@ export default function MapView({
         <MapEvents onMapClick={() => onMapClick(0, 0)} onZoomEnd={setZoom} />
         <MapController 
           centerOn={centerTrigger ? (userLocation || undefined) : undefined} 
-          points={filteredPoints}
+          points={points}
+          highlightedParcelCenter={highlightedParcelCenter || undefined}
+          highlightedParcelId={highlightedParcelId}
         />
         
         {/* Live User Location - Only shown if toggled ON */}
@@ -385,7 +501,7 @@ export default function MapView({
           />
         )}
 
-        {filteredPoints.map(point => {
+        {points.map(point => {
           const isSelected = selectedPointId === point.id;
           return (
             <Marker 
@@ -396,10 +512,6 @@ export default function MapView({
                   L.DomEvent.stopPropagation(e);
                   onPointClick(point);
                 },
-                mousedown: () => handleLongPressStart(() => onPointLongPress?.(point.id)),
-                mouseup: handleLongPressEnd,
-                touchstart: () => handleLongPressStart(() => onPointLongPress?.(point.id)),
-                touchend: handleLongPressEnd
               }}
               icon={L.divIcon({
                 className: 'custom-div-icon',
