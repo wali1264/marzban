@@ -11,12 +11,14 @@ export interface Point {
   accuracy: number; // in meters
   name?: string;
   description?: string;
+  generation?: number;
 }
 
 export interface Connection {
   id: string;
   fromId: string;
   toId: string;
+  generation?: number;
 }
 
 export interface Partner {
@@ -39,8 +41,9 @@ export interface Parcel {
   pointIds: string[]; // Ordered points forming the boundary
   divisions: Division[];
   area: number; // in square meters
-  ownerName?: string;
-  angle?: number; // Rotation angle for divisions in degrees
+  generation: number;
+  parentId?: string;
 }
 
-export type AppMode = 'VIEW' | 'RECORD' | 'CONNECT' | 'EDIT' | 'DIVIDE' | 'MANAGE' | 'CONVERT' | 'ROTATE';
+export type AppMode = 'VIEW' | 'RECORD' | 'CONNECT' | 'EDIT' | 'DIVIDE';
+export type GenerationMode = 1 | 2 | 3;

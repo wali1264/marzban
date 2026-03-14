@@ -26,28 +26,13 @@ import {
   EyeOff,
   Users,
   Scissors,
-  RotateCw,
-  UserCog,
-  Search,
-  ChevronDown,
-  SearchX,
-  ChevronUp,
-  Lock,
-  ShieldCheck,
-  KeyRound,
-  Database,
-  Zap,
-  RotateCcw
+  RotateCw
 } from 'lucide-react';
 import * as turf from '@turf/turf';
 import MapView from './components/Map/MapView';
 import PrecisionRecorder from './components/Recorder/PrecisionRecorder';
-import BackupModal from './components/Backup/BackupModal';
-import ConvertModal from './components/Convert/ConvertModal';
-import { RotationModal } from './components/Map/RotationModal';
-import { Point, Connection, AppMode, Parcel, Partner, Division } from './types';
+import { Point, Connection, AppMode, Parcel, Partner, Division, GenerationMode } from './types';
 import { cn } from './utils';
-import { geminiService } from './services/gemini';
 
 export default function App() {
   const [points, setPoints] = useState<Point[]>([]);
@@ -61,39 +46,12 @@ export default function App() {
   const [showUserLocation, setShowUserLocation] = useState(false);
 
   const [parcels, setParcels] = useState<Parcel[]>([]);
+  const [currentGeneration, setCurrentGeneration] = useState<GenerationMode>(1);
   const [showDivisionModal, setShowDivisionModal] = useState(false);
   const [selectedCycle, setSelectedCycle] = useState<Point[] | null>(null);
-  
-  const [aiReport, setAiReport] = useState<string | null>(null);
-  const [isAiLoading, setIsAiLoading] = useState(false);
-  const [showAiModal, setShowAiModal] = useState(false);
-  const [showProjectInfo, setShowProjectInfo] = useState(false);
-  const [generationFilter, setGenerationFilter] = useState(1);
-  const [showOwnerModal, setShowOwnerModal] = useState(false);
-  const [selectedParcelForOwner, setSelectedParcelForOwner] = useState<Parcel | null>(null);
-  const [ownerNameInput, setOwnerNameInput] = useState('');
-
-  const [isSearchActive, setIsSearchActive] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isGenMenuOpen, setIsGenMenuOpen] = useState(false);
-  const [highlightedParcelId, setHighlightedParcelId] = useState<string | null>(null);
-
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [showAdminModal, setShowAdminModal] = useState(false);
-  const [adminPassword, setAdminPassword] = useState('');
-  const [loginError, setLoginError] = useState(false);
-
-  const [pendingDeleteConnId, setPendingDeleteConnId] = useState<string | null>(null);
-  const [pendingDivisionAction, setPendingDivisionAction] = useState<{ parcelId: string, divId: string, type: 'DELETE' | 'EDIT' } | null>(null);
-  const [editPercentage, setEditPercentage] = useState<string>('');
-  const [showBackupModal, setShowBackupModal] = useState(false);
-  const [showRotationModal, setShowRotationModal] = useState(false);
-  const [selectedParcelForRotation, setSelectedParcelForRotation] = useState<Parcel | null>(null);
-  const [rotationAngle, setRotationAngle] = useState(0);
-  
-  const [showConvertModal, setShowConvertModal] = useState(false);
-  const [selectedParcelForConversion, setSelectedParcelForConversion] = useState<Parcel | null>(null);
-  const [selectedDivisionForConversion, setSelectedDivisionForConversion] = useState<Division | null>(null);
+  const [longPressTimer, setLongPressTimer] = useState<NodeJS.Timeout | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ type: 'POINT' | 'LINE'; id: string; neighborIds?: string[] } | null>(null);
+  const [showActionModal, setShowActionModal] = useState(false);
 
   // Load from local storage on mount
   useEffect(() => {
@@ -158,7 +116,8 @@ export default function App() {
       const newPoint: Point = {
         id: Math.random().toString(36).substr(2, 9),
         ...data,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        generation: currentGeneration
       };
       setPoints(prev => [...prev, newPoint]);
       setSelectedPointId(newPoint.id);
@@ -179,7 +138,8 @@ export default function App() {
           const newConn: Connection = {
             id: Math.random().toString(36).substr(2, 9),
             fromId: selectedPointId,
-            toId: point.id
+            toId: point.id,
+            generation: currentGeneration
           };
           setConnections(prev => [...prev, newConn]);
         }
@@ -237,45 +197,12 @@ export default function App() {
     if (mode === 'DIVIDE') {
       setSelectedCycle(cycle);
       setShowDivisionModal(true);
-    } else if (mode === 'ROTATE') {
-      const parcelId = cycle.map(p => p.id).sort().join(',');
-      const parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
-      if (parcel) {
-        setSelectedParcelForRotation(parcel);
-        setRotationAngle(parcel.angle || 0);
-      }
-    } else if (mode === 'MANAGE') {
-      const parcelId = cycle.map(p => p.id).sort().join(',');
-      let parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
-      
-      if (!parcel) {
-        // Create a temporary parcel if it doesn't exist
-        parcel = {
-          id: Math.random().toString(36).substr(2, 9),
-          pointIds: cycle.map(p => p.id),
-          ownerName: '',
-          divisions: [],
-          totalArea: 0 // Will be calculated if needed, but ownerName is the focus here
-        };
-        // We don't add it to state yet, we'll add it when the owner is saved
-      }
-      
-      setSelectedParcelForOwner(parcel);
-      setOwnerNameInput(parcel.ownerName || '');
-      setShowOwnerModal(true);
     }
   };
 
-  const splitPolygon = (cycle: Point[], percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL', angle: number = 0): [number, number][] => {
+  const splitPolygon = (cycle: Point[], percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL'): [number, number][] => {
     const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
-    let poly = turf.polygon([coords]);
-    const centroid = turf.centroid(poly);
-
-    // Rotate polygon by -angle to align the split line with axes
-    if (angle !== 0) {
-      poly = turf.transformRotate(poly, -angle, { pivot: centroid });
-    }
-
+    const poly = turf.polygon([coords]);
     const bbox = turf.bbox(poly);
     const totalArea = turf.area(poly);
     const targetArea = totalArea * (percentage / 100);
@@ -310,7 +237,7 @@ export default function App() {
         clipPoly = turf.polygon([[[bbox[0], bbox[1]], [bbox[2], bbox[1]], [bbox[2], mid], [bbox[0], mid], [bbox[0], bbox[1]]]]);
       }
 
-      let intersection = turf.intersect(turf.featureCollection([poly, clipPoly]));
+      const intersection = turf.intersect(turf.featureCollection([poly, clipPoly]));
       if (!intersection) {
         min = mid;
         continue;
@@ -321,11 +248,6 @@ export default function App() {
         min = mid;
       } else {
         max = mid;
-      }
-
-      // Rotate back if needed
-      if (angle !== 0) {
-        intersection = turf.transformRotate(intersection, angle, { pivot: centroid });
       }
 
       if (intersection.geometry.type === 'Polygon') {
@@ -339,266 +261,83 @@ export default function App() {
     return bestCoords.map(c => [c[1], c[0]] as [number, number]);
   };
 
-  const handleAddDivision = (name: string, percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL') => {
+  const handleAddDivision = (partnerName: string, percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL', parcelName?: string) => {
     if (!selectedCycle) return;
 
     const parcelId = selectedCycle.map(p => p.id).sort().join(',');
-    let existingParcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+    const existingParcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
     
     const currentTotal = existingParcel?.divisions.reduce((sum, d) => sum + d.percentage, 0) || 0;
-    if (currentTotal + percentage > 100.01) { // Small epsilon for float math
-      alert(`خطا: مجموع سهام نمی‌تواند بیش از ۱۰۰٪ باشد. (باقیمانده: ${Math.max(0, 100 - currentTotal).toFixed(1)}٪)`);
+    if (currentTotal + percentage > 100) {
+      alert(`خطا: مجموع سهام نمی‌تواند بیش از ۱۰۰٪ باشد. (باقیمانده: ${100 - currentTotal}٪)`);
       return;
     }
 
-    // For the geometry, we split the *original* cycle but we need to account for previous divisions
-    // A better way is to split the remaining polygon, but for this demo, 
-    // we'll split the original polygon at (currentTotal + percentage) and subtract the previous split.
-    // However, splitPolygon currently returns the *first* part.
-    // Let's refine the logic: we split at currentTotal + percentage to get the "cumulative" polygon,
-    // then we'd ideally subtract the previous cumulative polygon.
-    // For simplicity in this version, we'll just store the cumulative geometry.
-    
-    const parcelAngle = existingParcel?.angle || 0;
-    const cumulativeGeometry = splitPolygon(selectedCycle, percentage + currentTotal, orientation, parcelAngle);
-    let finalGeometry = cumulativeGeometry;
-
-    if (currentTotal > 0) {
-      const previousCumulativeGeometry = splitPolygon(selectedCycle, currentTotal, orientation, parcelAngle);
-      const poly1 = turf.polygon([[...cumulativeGeometry.map(c => [c[1], c[0]]), [cumulativeGeometry[0][1], cumulativeGeometry[0][0]]]]);
-      const poly2 = turf.polygon([[...previousCumulativeGeometry.map(c => [c[1], c[0]]), [previousCumulativeGeometry[0][1], previousCumulativeGeometry[0][0]]]]);
-      const diff = turf.difference(turf.featureCollection([poly1, poly2]));
-      
-      if (diff) {
-        if (diff.geometry.type === 'Polygon') {
-          finalGeometry = diff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number]);
-        } else if (diff.geometry.type === 'MultiPolygon') {
-          finalGeometry = diff.geometry.coordinates[0][0].map(c => [c[1], c[0]] as [number, number]);
-        }
-      }
-    }
+    const geometry = splitPolygon(selectedCycle, percentage + currentTotal, orientation);
     
     const newDivision: Division = {
       id: Math.random().toString(36).substr(2, 9),
-      partnerId: name,
+      partnerId: partnerName,
       percentage,
-      geometry: finalGeometry,
+      geometry,
       orientation
     };
 
+    // Create a new parcel for the next generation from this division
+    if (currentGeneration < 3) {
+      const nextGen = (currentGeneration + 1) as GenerationMode;
+      
+      // Create new points for the division geometry
+      const newPoints: Point[] = geometry.map(coord => ({
+        id: Math.random().toString(36).substr(2, 9),
+        lat: coord[0],
+        lng: coord[1],
+        timestamp: Date.now(),
+        accuracy: 0.1,
+        generation: nextGen
+      }));
+
+      // Create connections for the new points
+      const newConns: Connection[] = newPoints.map((p, i) => ({
+        id: Math.random().toString(36).substr(2, 9),
+        fromId: p.id,
+        toId: newPoints[(i + 1) % newPoints.length].id,
+        generation: nextGen
+      }));
+
+      const newParcel: Parcel = {
+        id: Math.random().toString(36).substr(2, 9),
+        name: `${parcelName || 'قطعه'} - ${partnerName}`,
+        pointIds: newPoints.map(p => p.id),
+        divisions: [],
+        area: turf.area(turf.polygon([[...geometry.map(c => [c[1], c[0]]), [geometry[0][1], geometry[0][0]]]])),
+        generation: nextGen,
+        parentId: existingParcel?.id
+      };
+
+      setPoints(prev => [...prev, ...newPoints]);
+      setConnections(prev => [...prev, ...newConns]);
+      setParcels(prev => [...prev, newParcel]);
+    }
+
     if (existingParcel) {
-      setParcels(prev => prev.map(p => p.id === existingParcel!.id ? {
+      setParcels(prev => prev.map(p => p.id === existingParcel.id ? {
         ...p,
+        name: parcelName || p.name,
         divisions: [...p.divisions, newDivision]
       } : p));
     } else {
       const newParcel: Parcel = {
         id: Math.random().toString(36).substr(2, 9),
-        name: `قطعه ${parcels.length + 1}`,
+        name: parcelName || "قطعه جدید",
         pointIds: selectedCycle.map(p => p.id),
         divisions: [newDivision],
-        area: turf.area(turf.polygon([[...selectedCycle.map(p => [p.lng, p.lat]), [selectedCycle[0].lng, selectedCycle[0].lat]]]))
+        area: turf.area(turf.polygon([[...selectedCycle.map(p => [p.lng, p.lat]), [selectedCycle[0].lng, selectedCycle[0].lat]]])),
+        generation: currentGeneration
       };
       setParcels(prev => [...prev, newParcel]);
     }
     setShowDivisionModal(false);
-  };
-
-  const handleUpdateParcelAngle = (parcelId: string, newAngle: number) => {
-    setParcels(prev => prev.map(p => {
-      if (p.id === parcelId) {
-        const parcelPoints = p.pointIds.map(id => points.find(pt => pt.id === id)).filter(Boolean) as Point[];
-        if (parcelPoints.length < 3) return p;
-
-        let currentTotal = 0;
-        const updatedDivisions = p.divisions.map(d => {
-          const cumulativeGeometry = splitPolygon(parcelPoints, d.percentage + currentTotal, d.orientation, newAngle);
-          let finalGeometry = cumulativeGeometry;
-
-          if (currentTotal > 0) {
-            const previousCumulativeGeometry = splitPolygon(parcelPoints, currentTotal, d.orientation, newAngle);
-            const poly1 = turf.polygon([[...cumulativeGeometry.map(c => [c[1], c[0]]), [cumulativeGeometry[0][1], cumulativeGeometry[0][0]]]]);
-            const poly2 = turf.polygon([[...previousCumulativeGeometry.map(c => [c[1], c[0]]), [previousCumulativeGeometry[0][1], previousCumulativeGeometry[0][0]]]]);
-            const diff = turf.difference(turf.featureCollection([poly1, poly2]));
-            
-            if (diff) {
-              if (diff.geometry.type === 'Polygon') {
-                finalGeometry = diff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number]);
-              } else if (diff.geometry.type === 'MultiPolygon') {
-                finalGeometry = diff.geometry.coordinates[0][0].map(c => [c[1], c[0]] as [number, number]);
-              }
-            }
-          }
-          
-          const updatedDiv = { ...d, geometry: finalGeometry };
-          currentTotal += d.percentage;
-          return updatedDiv;
-        });
-
-        return { ...p, angle: newAngle, divisions: updatedDivisions };
-      }
-      return p;
-    }));
-  };
-
-  const handleAiConsult = async (parcel: Parcel) => {
-    setIsAiLoading(true);
-    setShowAiModal(true);
-    try {
-      // Mocking heirs for now, in a real app we'd have a form for this
-      const report = await geminiService.calculateInheritance({
-        totalArea: parcel.area,
-        heirs: [
-          { name: 'همسر', relation: 'WIFE', count: 1 },
-          { name: 'پسران', relation: 'SON', count: 2 },
-          { name: 'دختران', relation: 'DAUGHTER', count: 1 }
-        ]
-      });
-      setAiReport(report || "پاسخی دریافت نشد.");
-    } catch (err) {
-      setAiReport("خطا در ارتباط با هوش مصنوعی.");
-    } finally {
-      setIsAiLoading(false);
-    }
-  };
-
-  const recalculateParcelDivisions = (parcel: Parcel, updatedDivisions: Division[]): Parcel => {
-    const cycle = parcel.pointIds.map(id => points.find(p => p.id === id)!).filter(Boolean);
-    if (cycle.length < 3) return parcel;
-
-    let currentTotal = 0;
-    const newDivisions = updatedDivisions.map(div => {
-      const cumulativeGeometry = splitPolygon(cycle, div.percentage + currentTotal, div.orientation);
-      let finalGeometry = cumulativeGeometry;
-
-      if (currentTotal > 0) {
-        const previousCumulativeGeometry = splitPolygon(cycle, currentTotal, div.orientation);
-        const poly1 = turf.polygon([[...cumulativeGeometry.map(c => [c[1], c[0]]), [cumulativeGeometry[0][1], cumulativeGeometry[0][0]]]]);
-        const poly2 = turf.polygon([[...previousCumulativeGeometry.map(c => [c[1], c[0]]), [previousCumulativeGeometry[0][1], previousCumulativeGeometry[0][0]]]]);
-        const diff = turf.difference(turf.featureCollection([poly1, poly2]));
-        
-        if (diff) {
-          if (diff.geometry.type === 'Polygon') {
-            finalGeometry = diff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number]);
-          } else if (diff.geometry.type === 'MultiPolygon') {
-            finalGeometry = diff.geometry.coordinates[0][0].map(c => [c[1], c[0]] as [number, number]);
-          }
-        }
-      }
-
-      currentTotal += div.percentage;
-      return { ...div, geometry: finalGeometry };
-    });
-
-    return { ...parcel, divisions: newDivisions };
-  };
-
-  const handleDeleteConnection = () => {
-    if (pendingDeleteConnId) {
-      setConnections(prev => prev.filter(c => c.id !== pendingDeleteConnId));
-      setPendingDeleteConnId(null);
-    }
-  };
-
-  const handleDeleteDivision = () => {
-    if (pendingDivisionAction) {
-      const { parcelId, divId } = pendingDivisionAction;
-      setParcels(prev => prev.map(p => {
-        if (p.id !== parcelId) return p;
-        const filteredDivs = p.divisions.filter(d => d.id !== divId);
-        return recalculateParcelDivisions(p, filteredDivs);
-      }));
-      setPendingDivisionAction(null);
-    }
-  };
-
-  const handleUpdateDivision = () => {
-    if (pendingDivisionAction && editPercentage) {
-      const { parcelId, divId } = pendingDivisionAction;
-      const newPercent = parseFloat(editPercentage);
-      
-      setParcels(prev => prev.map(p => {
-        if (p.id !== parcelId) return p;
-        
-        const otherDivsTotal = p.divisions
-          .filter(d => d.id !== divId)
-          .reduce((sum, d) => sum + d.percentage, 0);
-          
-        if (otherDivsTotal + newPercent > 100.01) {
-          alert("خطا: مجموع سهام نمی‌تواند بیش از ۱۰۰٪ باشد.");
-          return p;
-        }
-
-        const updatedDivs = p.divisions.map(d => 
-          d.id === divId ? { ...d, percentage: newPercent } : d
-        );
-        
-        return recalculateParcelDivisions(p, updatedDivs);
-      }));
-      setPendingDivisionAction(null);
-      setEditPercentage('');
-    }
-  };
-
-  const handleUpdateOwner = () => {
-    if (selectedParcelForOwner) {
-      setParcels(prev => {
-        const exists = prev.some(p => p.id === selectedParcelForOwner.id);
-        if (exists) {
-          return prev.map(p => 
-            p.id === selectedParcelForOwner.id ? { ...p, ownerName: ownerNameInput } : p
-          );
-        } else {
-          // Add the new parcel
-          return [...prev, { ...selectedParcelForOwner, ownerName: ownerNameInput }];
-        }
-      });
-      setShowOwnerModal(false);
-      setSelectedParcelForOwner(null);
-      setOwnerNameInput('');
-    }
-  };
-
-  const handleRestore = (data: { points: Point[]; connections: Connection[]; parcels: Parcel[] }) => {
-    setPoints(data.points);
-    setConnections(data.connections);
-    setParcels(data.parcels);
-  };
-
-  const handleConvertShare = (newPoints: Point[], newParcel: Parcel) => {
-    // Add new points
-    setPoints(prev => [...prev, ...newPoints]);
-    
-    // Create connections for the new parcel
-    const newConnections: Connection[] = [];
-    for (let i = 0; i < newParcel.pointIds.length; i++) {
-      const fromId = newParcel.pointIds[i];
-      const toId = newParcel.pointIds[(i + 1) % newParcel.pointIds.length];
-      newConnections.push({
-        id: Math.random().toString(36).substr(2, 9),
-        fromId,
-        toId
-      });
-    }
-    setConnections(prev => [...prev, ...newConnections]);
-    
-    // Add new parcel
-    setParcels(prev => [...prev, newParcel]);
-    
-    // Remove the division from the original parcel
-    if (selectedParcelForConversion && selectedDivisionForConversion) {
-      setParcels(prev => prev.map(p => {
-        if (p.id === selectedParcelForConversion.id) {
-          return {
-            ...p,
-            divisions: p.divisions.filter(d => d.id !== selectedDivisionForConversion.id)
-          };
-        }
-        return p;
-      }));
-    }
-    
-    setMode('VIEW');
   };
 
   const startUpdate = () => {
@@ -606,136 +345,95 @@ export default function App() {
     setShowRecorder(true);
   };
 
+  const handlePointLongPress = (pointId: string) => {
+    // Find neighbors in connections
+    const connectedConns = connections.filter(c => c.fromId === pointId || c.toId === pointId);
+    if (connectedConns.length === 2) {
+      const neighborIds = connectedConns.map(c => c.fromId === pointId ? c.toId : c.fromId);
+      setPendingAction({ type: 'POINT', id: pointId, neighborIds });
+      setShowActionModal(true);
+    }
+  };
+
+  const handleLineLongPress = (connId: string) => {
+    setPendingAction({ type: 'LINE', id: connId });
+    setShowActionModal(true);
+  };
+
+  const confirmPendingAction = () => {
+    if (!pendingAction) return;
+
+    if (pendingAction.type === 'POINT') {
+      const { id, neighborIds } = pendingAction;
+      if (neighborIds && neighborIds.length === 2) {
+        const [n1, n2] = neighborIds;
+        const bypassConn: Connection = {
+          id: Math.random().toString(36).substr(2, 9),
+          fromId: n1,
+          toId: n2
+        };
+        setConnections(prev => [...prev.filter(c => c.fromId !== id && c.toId !== id), bypassConn]);
+      } else {
+        setConnections(prev => prev.filter(c => c.fromId !== id && c.toId !== id));
+      }
+      setPoints(prev => prev.filter(p => p.id !== id));
+      if (selectedPointId === id) setSelectedPointId(null);
+    } else if (pendingAction.type === 'LINE') {
+      setConnections(prev => prev.filter(c => c.id !== pendingAction.id));
+    }
+
+    setShowActionModal(false);
+    setPendingAction(null);
+  };
+
+  const handleParcelUpdate = (parcelId: string, updates: Partial<Parcel>) => {
+    setParcels(prev => prev.map(p => p.id === parcelId ? { ...p, ...updates } : p));
+  };
+
   const selectedPoint = points.find(p => p.id === selectedPointId);
 
   return (
     <div className="flex flex-col h-screen w-full bg-slate-50 overflow-hidden font-sans" dir="rtl">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-4 py-2 flex items-center justify-between shadow-sm z-10">
+      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between shadow-sm z-10">
         <div className="flex items-center gap-2">
-           {/* Expandable Generation Menu */}
-           <div className="relative">
-             <button
-               onClick={() => setIsGenMenuOpen(!isGenMenuOpen)}
-               className="flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700 transition-all shadow-sm"
-             >
-               <span>نسل {generationFilter}</span>
-               <ChevronDown className={cn("w-4 h-4 transition-transform", isGenMenuOpen && "rotate-180")} />
-             </button>
-
-             <AnimatePresence>
-               {isGenMenuOpen && (
-                 <motion.div
-                   initial={{ opacity: 0, y: -10 }}
-                   animate={{ opacity: 1, y: 0 }}
-                   exit={{ opacity: 0, y: -10 }}
-                   className="absolute top-full right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-xl z-50 overflow-hidden min-w-[120px]"
-                 >
-                   {[1, 2, 3].map(gen => (
-                     <button
-                       key={gen}
-                       onClick={() => {
-                         setGenerationFilter(gen);
-                         setIsGenMenuOpen(false);
-                       }}
-                       className={cn(
-                         "w-full px-4 py-3 text-right text-xs font-bold transition-colors flex items-center justify-between",
-                         generationFilter === gen ? "bg-indigo-50 text-indigo-600" : "text-slate-600 hover:bg-slate-50"
-                       )}
-                     >
-                       <span>نسل {gen}</span>
-                       {generationFilter === gen && <CheckCircle2 className="w-3 h-3" />}
-                     </button>
-                   ))}
-                 </motion.div>
-               )}
-             </AnimatePresence>
-           </div>
+          <div className="bg-emerald-600 p-2 rounded-lg shadow-emerald-200 shadow-lg">
+            <Layers className="text-white w-5 h-5" />
+          </div>
+          <div>
+            <h1 className="font-bold text-slate-900 text-lg leading-tight">مرزبان</h1>
+            <p className="text-xs text-slate-500">سیستم نقشه‌برداری اراضی</p>
+          </div>
         </div>
-
-        <div className="flex items-center gap-1 sm:gap-2">
+        <div className="flex items-center gap-3">
+           <div className="flex bg-slate-100 p-1 rounded-xl">
+             {[1, 2, 3].map((g) => (
+               <button
+                 key={g}
+                 onClick={() => setCurrentGeneration(g as GenerationMode)}
+                 className={cn(
+                   "px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                   currentGeneration === g 
+                     ? "bg-white text-emerald-600 shadow-sm" 
+                     : "text-slate-500 hover:text-slate-700"
+                 )}
+               >
+                 نسل {g}
+               </button>
+             ))}
+           </div>
            <button 
-             onClick={() => {
-               setIsSearchActive(!isSearchActive);
-               if (isSearchActive) {
-                 setSearchQuery('');
-                 setHighlightedParcelId(null);
-               }
-             }}
+             onClick={() => setMode(mode === 'DIVIDE' ? 'VIEW' : 'DIVIDE')}
              className={cn(
                "p-2 rounded-full transition-colors",
-               isSearchActive ? "bg-amber-100 text-amber-600" : "text-slate-500 hover:bg-slate-100"
+               mode === 'DIVIDE' ? "bg-blue-100 text-blue-600" : "text-slate-500 hover:bg-slate-100"
              )}
-             title="جستجوی مالک"
+             title="حالت تقسیم اراضی"
            >
-             {isSearchActive ? <SearchX className="w-5 h-5" /> : <Search className="w-5 h-5" />}
+             <Users className="w-5 h-5" />
            </button>
-
-           <button 
-             onClick={() => setShowBackupModal(true)}
-             className="p-2 rounded-full text-slate-500 hover:bg-slate-100 transition-colors"
-             title="پشتیبان‌گیری"
-           >
-             <Database className="w-5 h-5" />
-           </button>
-
-           {isAdmin && (
-             <div className="flex items-center gap-1">
-               <button 
-                 onClick={() => {
-                   const newMode = mode === 'ROTATE' ? 'VIEW' : 'ROTATE';
-                   setMode(newMode);
-                   setShowRotationModal(newMode === 'ROTATE');
-                 }}
-                 className={cn(
-                   "p-2 rounded-full transition-colors",
-                   mode === 'ROTATE' ? "bg-amber-100 text-amber-600" : "text-slate-500 hover:bg-slate-100"
-                 )}
-                 title="چرخش سهم‌ها"
-               >
-                 <RotateCcw className="w-5 h-5" />
-               </button>
-
-               <button 
-                 onClick={() => setMode(mode === 'MANAGE' ? 'VIEW' : 'MANAGE')}
-                 className={cn(
-                   "p-2 rounded-full transition-colors",
-                   mode === 'MANAGE' ? "bg-indigo-100 text-indigo-600" : "text-slate-500 hover:bg-slate-100"
-                 )}
-                 title="مدیریت مالکین"
-               >
-                 <UserCog className="w-5 h-5" />
-               </button>
-               
-               <button 
-                 onClick={() => setMode(mode === 'DIVIDE' ? 'VIEW' : 'DIVIDE')}
-                 className={cn(
-                   "p-2 rounded-full transition-colors",
-                   mode === 'DIVIDE' ? "bg-blue-100 text-blue-600" : "text-slate-500 hover:bg-slate-100"
-                 )}
-                 title="حالت تقسیم اراضی"
-               >
-                 <Users className="w-5 h-5" />
-               </button>
-             </div>
-           )}
-
-           <button 
-             onClick={() => {
-               if (isAdmin) {
-                 setIsAdmin(false);
-                 setMode('VIEW');
-               } else {
-                 setShowAdminModal(true);
-               }
-             }}
-             className={cn(
-               "p-2 rounded-full transition-all duration-300",
-               isAdmin ? "bg-emerald-100 text-emerald-600" : "bg-slate-100 text-slate-400 hover:bg-slate-200"
-             )}
-             title={isAdmin ? "خروج از مدیریت" : "ورود مدیر"}
-           >
-             {isAdmin ? <ShieldCheck className="w-5 h-5" /> : <Lock className="w-5 h-5" />}
+           <button className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
+             <Settings className="w-5 h-5" />
            </button>
         </div>
       </header>
@@ -747,30 +445,18 @@ export default function App() {
           connections={connections}
           mode={mode}
           onPointClick={handlePointClick}
-          onMapClick={() => {
-            setSelectedPointId(null);
-            if (isSearchActive && !searchQuery) setIsSearchActive(false);
-          }}
+          onMapClick={() => setSelectedPointId(null)}
           onConnectionClick={handleConnectionClick}
-          onConnectionLongPress={(id) => mode === 'CONNECT' && setPendingDeleteConnId(id)}
           onPolygonClick={handlePolygonClick}
-          onDivisionClick={(pId, dId) => {
-            const parcel = parcels.find(p => p.id === pId);
-            const division = parcel?.divisions.find(d => d.id === dId);
-            if (parcel && division) {
-              setSelectedParcelForConversion(parcel);
-              setSelectedDivisionForConversion(division);
-              setShowConvertModal(true);
-            }
-          }}
-          onDivisionLongPress={(pId, dId) => setPendingDivisionAction({ parcelId: pId, divId: dId, type: 'DELETE' })}
           userLocation={userLocation}
           showUserLocation={showUserLocation}
           selectedPointId={selectedPointId}
           centerTrigger={centerTrigger}
           parcels={parcels}
-          generationFilter={generationFilter}
-          highlightedParcelId={highlightedParcelId}
+          currentGeneration={currentGeneration}
+          onPointLongPress={handlePointLongPress}
+          onLineLongPress={handleLineLongPress}
+          onParcelUpdate={handleParcelUpdate}
         />
 
         {/* Floating Controls */}
@@ -785,31 +471,16 @@ export default function App() {
           >
             <Navigation className="w-6 h-6" />
           </button>
-          
-          {isAdmin && (
-            <>
-              <button 
-                onClick={() => setMode('CONNECT')}
-                className={cn(
-                  "p-3 rounded-2xl shadow-xl transition-all",
-                  mode === 'CONNECT' ? "bg-emerald-600 text-white" : "bg-white text-slate-600"
-                )}
-                title="حالت اتصال مرزها"
-              >
-                <LinkIcon className="w-6 h-6" />
-              </button>
-              <button 
-                onClick={() => setMode('CONVERT')}
-                className={cn(
-                  "p-3 rounded-2xl shadow-xl transition-all",
-                  mode === 'CONVERT' ? "bg-emerald-600 text-white" : "bg-white text-slate-600"
-                )}
-                title="حالت تبدیل سهم"
-              >
-                <Zap className="w-6 h-6" />
-              </button>
-            </>
-          )}
+          <button 
+            onClick={() => setMode('CONNECT')}
+            className={cn(
+              "p-3 rounded-2xl shadow-xl transition-all",
+              mode === 'CONNECT' ? "bg-emerald-600 text-white" : "bg-white text-slate-600"
+            )}
+            title="حالت اتصال مرزها"
+          >
+            <LinkIcon className="w-6 h-6" />
+          </button>
           
           <div className="h-px bg-slate-200 my-1" />
 
@@ -837,83 +508,24 @@ export default function App() {
         </div>
 
         {/* Bottom Action Bar */}
-        <div className="absolute bottom-8 left-0 right-0 flex flex-col items-center px-4 z-[1000] gap-3">
-          <AnimatePresence>
-            {isSearchActive && searchQuery.length > 0 && (
-              <motion.div 
-                initial={{ y: 20, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                exit={{ y: 20, opacity: 0 }}
-                className="bg-white/95 backdrop-blur-md border border-slate-200 rounded-3xl shadow-2xl w-full max-w-md overflow-hidden max-h-60 overflow-y-auto"
-              >
-                {parcels.filter(p => p.ownerName?.toLowerCase().includes(searchQuery.toLowerCase())).length > 0 ? (
-                  parcels
-                    .filter(p => p.ownerName?.toLowerCase().includes(searchQuery.toLowerCase()))
-                    .map(parcel => (
-                      <button
-                        key={parcel.id}
-                        onClick={() => {
-                          setHighlightedParcelId(parcel.id);
-                          setCenterTrigger(prev => prev + 1);
-                          // Zoom to parcel logic: we need to find the center of the parcel
-                          // MapView handles centering via centerTrigger, but we need to tell it which point to center on
-                          // For now, MapView centers on user location if available, or just triggers a re-render
-                          // I'll update MapView to handle centering on a specific parcel if highlightedParcelId is set
-                        }}
-                        className={cn(
-                          "w-full px-5 py-4 text-right flex items-center justify-between border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors",
-                          highlightedParcelId === parcel.id ? "bg-emerald-50 text-emerald-700" : "text-slate-700"
-                        )}
-                      >
-                        <div className="flex flex-col items-start text-right w-full">
-                          <span className="font-bold text-sm">{parcel.ownerName}</span>
-                          <span className="text-[10px] text-slate-400">قطعه زمین شماره {parcel.id.slice(0, 4)}</span>
-                        </div>
-                        <Navigation className="w-4 h-4 text-slate-300" />
-                      </button>
-                    ))
-                ) : (
-                  <div className="p-8 text-center text-slate-400 text-sm">
-                    مالکی با این نام پیدا نشد
-                  </div>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <div className={cn(
-            "bg-white/90 backdrop-blur-md border border-white/20 p-2 rounded-3xl shadow-2xl flex items-center gap-2 transition-all duration-500",
-            (!isSearchActive && !isAdmin) ? "w-fit px-4" : "max-w-md w-full"
-          )}>
-            {!isSearchActive ? (
-              isAdmin && (
-                <button 
-                  onClick={() => { setIsUpdating(false); setShowRecorder(true); }}
-                  className="flex-1 flex items-center justify-center gap-2 py-4 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg shadow-emerald-200 transition-all active:scale-95"
-                >
-                  <Crosshair className="w-5 h-5" />
-                  ثبت مختصات دقیق
-                </button>
-              )
-            ) : (
-              <div className="flex-1 flex items-center gap-2 px-4 py-1 bg-slate-100 rounded-2xl border border-slate-200/50">
-                <Search className="w-5 h-5 text-slate-400" />
-                <input 
-                  type="text"
-                  autoFocus
-                  placeholder="جستجوی نام مالک..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="flex-1 py-3 bg-transparent border-none outline-none text-sm font-bold text-slate-700 placeholder:text-slate-400 text-right"
-                  dir="rtl"
-                />
-                {searchQuery && (
-                  <button onClick={() => { setSearchQuery(''); setHighlightedParcelId(null); }}>
-                    <X className="w-4 h-4 text-slate-400" />
-                  </button>
-                )}
-              </div>
-            )}
+        <div className="absolute bottom-8 left-0 right-0 flex justify-center px-4 z-[1000]">
+          <div className="bg-white/90 backdrop-blur-md border border-white/20 p-2 rounded-3xl shadow-2xl flex items-center gap-2 max-w-md w-full">
+            <button 
+              onClick={() => { setIsUpdating(false); setShowRecorder(true); }}
+              className="flex-1 flex items-center justify-center gap-2 py-4 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg shadow-emerald-200 transition-all active:scale-95"
+            >
+              <Crosshair className="w-5 h-5" />
+              ثبت مختصات دقیق
+            </button>
+            
+            <div className="w-px h-8 bg-slate-200 mx-1" />
+            
+            <button 
+              className="p-4 text-slate-600 hover:bg-slate-100 rounded-2xl transition-colors"
+              title="اطلاعات پروژه"
+            >
+              <Info className="w-6 h-6" />
+            </button>
           </div>
         </div>
 
@@ -954,24 +566,22 @@ export default function App() {
                 <span className="text-[10px] text-slate-400">{new Date(selectedPoint.timestamp).toLocaleString('fa-IR')}</span>
               </div>
               
-              {isAdmin && (
-                <div className="grid grid-cols-2 gap-3">
-                  <button 
-                    onClick={() => deletePoint(selectedPoint.id)}
-                    className="flex items-center justify-center gap-2 py-4 bg-rose-50 text-rose-600 rounded-2xl font-bold hover:bg-rose-100 transition-colors"
-                  >
-                    <Trash2 className="w-5 h-5" />
-                    حذف
-                  </button>
-                  <button 
-                    onClick={startUpdate}
-                    className="flex items-center justify-center gap-2 py-4 bg-amber-50 text-amber-600 rounded-2xl font-bold hover:bg-amber-100 transition-colors"
-                  >
-                    <RefreshCw className="w-5 h-5" />
-                    بروزرسانی
-                  </button>
-                </div>
-              )}
+              <div className="grid grid-cols-2 gap-3">
+                <button 
+                  onClick={() => deletePoint(selectedPoint.id)}
+                  className="flex items-center justify-center gap-2 py-4 bg-rose-50 text-rose-600 rounded-2xl font-bold hover:bg-rose-100 transition-colors"
+                >
+                  <Trash2 className="w-5 h-5" />
+                  حذف
+                </button>
+                <button 
+                  onClick={startUpdate}
+                  className="flex items-center justify-center gap-2 py-4 bg-amber-50 text-amber-600 rounded-2xl font-bold hover:bg-amber-100 transition-colors"
+                >
+                  <RefreshCw className="w-5 h-5" />
+                  بروزرسانی
+                </button>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -1019,42 +629,26 @@ export default function App() {
               </div>
 
               <div className="p-6">
-                {/* AI Suggestion Button */}
-                {selectedCycle && (
-                  <button 
-                    onClick={() => {
-                      const parcelId = selectedCycle.map(p => p.id).sort().join(',');
-                      const p = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
-                      if (p) handleAiConsult(p);
-                      else {
-                         // Create a temporary parcel for AI consult
-                         const tempParcel: Parcel = {
-                           id: 'temp',
-                           name: 'موقت',
-                           pointIds: selectedCycle.map(pt => pt.id),
-                           divisions: [],
-                           area: turf.area(turf.polygon([[...selectedCycle.map(pt => [pt.lng, pt.lat]), [selectedCycle[0].lng, selectedCycle[0].lat]]]))
-                         };
-                         handleAiConsult(tempParcel);
-                      }
-                    }}
-                    className="w-full mb-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-100"
-                  >
-                    <Activity className="w-4 h-4" />
-                    مشاوره هوشمند تقسیم ارث (AI)
-                  </button>
-                )}
-
                 <form onSubmit={(e) => {
                   e.preventDefault();
                   const formData = new FormData(e.currentTarget);
                   handleAddDivision(
                     formData.get('name') as string,
                     Number(formData.get('percentage')),
-                    formData.get('orientation') as 'HORIZONTAL' | 'VERTICAL'
+                    formData.get('orientation') as 'HORIZONTAL' | 'VERTICAL',
+                    formData.get('parcelName') as string
                   );
                 }}>
                   <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-2">نام قطعه زمین</label>
+                      <input 
+                        name="parcelName"
+                        className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-4 py-3 focus:border-blue-500 focus:outline-none transition-colors"
+                        placeholder="مثلاً: زمین پدری"
+                        defaultValue={parcels.find(p => p.pointIds.sort().join(',') === selectedCycle?.map(pt => pt.id).sort().join(','))?.name || ""}
+                      />
+                    </div>
                     <div>
                       <label className="block text-sm font-bold text-slate-700 mb-2">نام شریک / فرزند</label>
                       <input 
@@ -1110,455 +704,57 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
-      {/* Project Info Modal */}
+
+      {/* Action Modal (Long Press) */}
       <AnimatePresence>
-        {showProjectInfo && (
+        {showActionModal && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-4" dir="rtl">
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-[32px] shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[80vh]"
+              className="bg-white rounded-[32px] shadow-2xl w-full max-w-md overflow-hidden"
             >
               <div className="p-6 border-b border-slate-100 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="bg-emerald-100 p-2 rounded-xl">
-                    <Info className="w-6 h-6 text-emerald-600" />
+                  <div className="bg-rose-100 p-2 rounded-xl">
+                    <Trash2 className="w-6 h-6 text-rose-600" />
                   </div>
-                  <h2 className="text-xl font-bold text-slate-900">اطلاعات کلی پروژه</h2>
+                  <h2 className="text-xl font-bold text-slate-900">
+                    {pendingAction?.type === 'POINT' ? 'حذف از زنجیره' : 'قطع اتصال'}
+                  </h2>
                 </div>
-                <button onClick={() => setShowProjectInfo(false)} className="p-2 hover:bg-slate-100 rounded-full">
+                <button onClick={() => setShowActionModal(false)} className="p-2 hover:bg-slate-100 rounded-full">
                   <X className="w-5 h-5 text-slate-400" />
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                    <span className="text-[10px] text-slate-500 block mb-1">تعداد نقاط ثبت شده</span>
-                    <span className="text-xl font-bold text-slate-900">{points.length} نقطه</span>
-                  </div>
-                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                    <span className="text-[10px] text-slate-500 block mb-1">تعداد قطعات شناسایی شده</span>
-                    <span className="text-xl font-bold text-slate-900">{parcels.length} قطعه</span>
-                  </div>
-                </div>
+              <div className="p-6">
+                <p className="text-slate-600 mb-8 leading-relaxed">
+                  {pendingAction?.type === 'POINT' 
+                    ? 'آیا می‌خواهید این نقطه را از زنجیره حذف کنید؟ در صورت حذف، دو نقطه مجاور به هم متصل خواهند شد تا مرز اصلاح شود.'
+                    : 'آیا از قطع این اتصال مرزی اطمینان دارید؟ این کار باعث باز شدن حلقه مرزی می‌شود.'}
+                </p>
 
-                {parcels.length > 0 ? (
-                  <div className="space-y-4">
-                    <h3 className="font-bold text-slate-800 text-sm">لیست قطعات و تقسیمات:</h3>
-                    {parcels.map((parcel, idx) => (
-                      <div key={parcel.id} className="border border-slate-100 rounded-2xl p-4 bg-white shadow-sm">
-                        <div className="flex justify-between items-center mb-3">
-                          <span className="font-bold text-slate-900">{parcel.name}</span>
-                          <span className="text-xs font-mono text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg">
-                            {parcel.area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })} m²
-                          </span>
-                        </div>
-                        
-                        {parcel.divisions.length > 0 ? (
-                          <div className="space-y-2">
-                            {parcel.divisions.map(div => (
-                              <div key={div.id} className="flex justify-between items-center text-xs bg-slate-50 p-2 rounded-xl">
-                                <span className="text-slate-700">{div.partnerId}</span>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-bold text-blue-600">{div.percentage}%</span>
-                                  <span className="text-slate-400">({(parcel.area * div.percentage / 100).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} m²)</span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-[10px] text-slate-400 italic">هنوز تقسیمی برای این قطعه ثبت نشده است.</p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-center py-12">
-                    <div className="bg-slate-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                      <Layers className="w-8 h-8 text-slate-300" />
-                    </div>
-                    <p className="text-sm text-slate-500">هنوز هیچ قطعه‌ای (Polygon) ایجاد نشده است. نقاط را به هم متصل کنید تا قطعات شکل بگیرند.</p>
-                  </div>
-                )}
-              </div>
-
-              <div className="p-6 bg-slate-50 border-t border-slate-100">
-                <button 
-                  onClick={() => setShowProjectInfo(false)}
-                  className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold shadow-xl active:scale-95 transition-all"
-                >
-                  بستن
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* AI Modal */}
-      <AnimatePresence>
-        {showAiModal && (
-          <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[3000] flex items-center justify-center p-4" dir="rtl">
-            <motion.div 
-              initial={{ y: 50, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 50, opacity: 0 }}
-              className="bg-white rounded-[40px] shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden"
-            >
-              <div className="p-8 border-b border-slate-100 flex items-center justify-between bg-indigo-50/50">
-                <div className="flex items-center gap-4">
-                  <div className="bg-indigo-600 p-3 rounded-2xl shadow-lg shadow-indigo-200">
-                    <Activity className="w-6 h-6 text-white" />
-                  </div>
-                  <div>
-                    <h2 className="text-2xl font-black text-slate-900">مشاور هوشمند مرزبان</h2>
-                    <p className="text-sm text-indigo-600 font-bold">تحلیل فقهی و حقوقی تقسیم اراضی</p>
-                  </div>
-                </div>
-                <button onClick={() => setShowAiModal(false)} className="p-3 hover:bg-white rounded-full transition-colors shadow-sm">
-                  <X className="w-6 h-6 text-slate-400" />
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
-                {isAiLoading ? (
-                  <div className="flex flex-col items-center justify-center h-64 gap-6">
-                    <div className="relative">
-                      <div className="w-16 h-16 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin" />
-                      <Activity className="absolute inset-0 m-auto w-6 h-6 text-indigo-600 animate-pulse" />
-                    </div>
-                    <div className="text-center">
-                      <p className="text-lg font-bold text-slate-800">در حال تحلیل قوانین و محاسبات...</p>
-                      <p className="text-sm text-slate-500 mt-1">این فرآیند ممکن است چند لحظه زمان ببرد</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="prose prose-slate max-w-none">
-                    <div className="bg-white p-6 rounded-3xl border border-indigo-100 shadow-sm leading-relaxed text-slate-700 whitespace-pre-wrap font-medium">
-                      {aiReport}
-                    </div>
-                    
-                    <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
-                        <h4 className="font-bold text-emerald-800 text-sm mb-1">توصیه فنی</h4>
-                        <p className="text-xs text-emerald-700">برای دقت بیشتر، حتماً نقاط مرزی را در ساعات اولیه روز که سیگنال GPS پایدارتر است ثبت کنید.</p>
-                      </div>
-                      <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100">
-                        <h4 className="font-bold text-amber-800 text-sm mb-1">نکته حقوقی</h4>
-                        <p className="text-xs text-amber-700">این محاسبات جنبه مشورتی دارد. برای رسمیت قانونی، تاییدیه مراجع ذی‌صلاح الزامی است.</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="p-6 bg-white border-t border-slate-100 flex justify-end">
-                <button 
-                  onClick={() => setShowAiModal(false)}
-                  className="px-8 py-4 bg-slate-900 text-white rounded-2xl font-bold shadow-xl active:scale-95 transition-all"
-                >
-                  متوجه شدم
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Owner Modal */}
-      <AnimatePresence>
-        {showOwnerModal && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4" dir="rtl">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-[32px] shadow-2xl w-full max-w-md overflow-hidden"
-            >
-              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-                <h2 className="text-xl font-bold text-slate-900">مدیریت مالک قطعه</h2>
-                <button onClick={() => setShowOwnerModal(false)} className="p-2 hover:bg-slate-100 rounded-full">
-                  <X className="w-5 h-5 text-slate-400" />
-                </button>
-              </div>
-
-              <div className="p-8 space-y-6">
-                <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">نام مالک زمین</label>
-                  <input 
-                    type="text"
-                    value={ownerNameInput}
-                    onChange={(e) => setOwnerNameInput(e.target.value)}
-                    className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-4 py-4 focus:border-indigo-500 focus:outline-none transition-colors text-lg"
-                    placeholder="مثلاً: پدربزرگ (حاج محمد)"
-                    autoFocus
-                  />
-                </div>
-                
                 <div className="grid grid-cols-2 gap-3">
                   <button 
-                    onClick={() => {
-                      setOwnerNameInput('');
-                      handleUpdateOwner();
-                    }}
-                    className="py-4 bg-slate-100 text-rose-600 rounded-2xl font-bold hover:bg-rose-50 transition-colors"
-                  >
-                    حذف نام
-                  </button>
-                  <button 
-                    onClick={handleUpdateOwner}
-                    className="py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
-                  >
-                    ثبت نام مالک
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Admin Login Modal */}
-      <AnimatePresence>
-        {showAdminModal && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[5000] flex items-center justify-center p-4" dir="rtl">
-            <motion.div 
-              initial={{ scale: 0.9, y: 20, opacity: 0 }}
-              animate={{ scale: 1, y: 0, opacity: 1 }}
-              exit={{ scale: 0.9, y: 20, opacity: 0 }}
-              className="bg-white rounded-[40px] shadow-2xl w-full max-w-md overflow-hidden border border-white/20"
-            >
-              <div className="p-8 text-center bg-gradient-to-b from-slate-50 to-white">
-                <div className="w-20 h-20 bg-indigo-100 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-inner">
-                  <KeyRound className="w-10 h-10 text-indigo-600" />
-                </div>
-                <h2 className="text-2xl font-black text-slate-900 mb-2">ورود به پنل مدیریت</h2>
-                <p className="text-slate-500 text-sm">برای دسترسی به ابزارهای ویرایشی، رمز عبور را وارد کنید</p>
-              </div>
-
-              <div className="p-8 pt-0 space-y-6">
-                <div className="relative">
-                  <input 
-                    type="password"
-                    value={adminPassword}
-                    onChange={(e) => {
-                      setAdminPassword(e.target.value);
-                      setLoginError(false);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        if (adminPassword === 'Alliwali@1264') {
-                          setIsAdmin(true);
-                          setShowAdminModal(false);
-                          setAdminPassword('');
-                        } else {
-                          setLoginError(true);
-                        }
-                      }
-                    }}
-                    className={cn(
-                      "w-full bg-slate-50 border-2 rounded-3xl px-6 py-5 focus:outline-none transition-all text-center text-2xl tracking-[0.5em] font-mono",
-                      loginError ? "border-rose-500 bg-rose-50 text-rose-600" : "border-slate-100 focus:border-indigo-500 text-slate-900"
-                    )}
-                    placeholder="••••••••"
-                    autoFocus
-                  />
-                  {loginError && (
-                    <motion.p 
-                      initial={{ opacity: 0, y: -10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="text-rose-500 text-xs font-bold mt-3 text-center"
-                    >
-                      رمز عبور اشتباه است. دوباره تلاش کنید.
-                    </motion.p>
-                  )}
-                </div>
-                
-                <div className="grid grid-cols-1 gap-3">
-                  <button 
-                    onClick={() => {
-                      if (adminPassword === 'Alliwali@1264') {
-                        setIsAdmin(true);
-                        setShowAdminModal(false);
-                        setAdminPassword('');
-                      } else {
-                        setLoginError(true);
-                      }
-                    }}
-                    className="py-5 bg-indigo-600 text-white rounded-[24px] font-bold shadow-xl shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-95 flex items-center justify-center gap-2"
-                  >
-                    <ShieldCheck className="w-5 h-5" />
-                    تایید و ورود
-                  </button>
-                  <button 
-                    onClick={() => {
-                      setShowAdminModal(false);
-                      setAdminPassword('');
-                      setLoginError(false);
-                    }}
-                    className="py-4 text-slate-400 font-bold hover:text-slate-600 transition-colors"
+                    onClick={() => setShowActionModal(false)}
+                    className="py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-all"
                   >
                     انصراف
                   </button>
+                  <button 
+                    onClick={confirmPendingAction}
+                    className="py-4 bg-rose-600 text-white rounded-2xl font-bold shadow-lg shadow-rose-100 hover:bg-rose-700 transition-all active:scale-95"
+                  >
+                    تایید و اجرا
+                  </button>
                 </div>
               </div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
-
-      {/* Delete Connection Modal */}
-      <AnimatePresence>
-        {pendingDeleteConnId && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4" dir="rtl">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-[32px] shadow-2xl w-full max-w-sm p-8 text-center"
-            >
-              <div className="bg-rose-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
-                <Scissors className="w-8 h-8 text-rose-600" />
-              </div>
-              <h2 className="text-xl font-bold text-slate-900 mb-2">قطع اتصال مرزی</h2>
-              <p className="text-slate-500 text-sm mb-8">آیا از حذف این اتصال و شکستن مرز اطمینان دارید؟</p>
-              
-              <div className="grid grid-cols-2 gap-3">
-                <button 
-                  onClick={() => setPendingDeleteConnId(null)}
-                  className="py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-colors"
-                >
-                  انصراف
-                </button>
-                <button 
-                  onClick={handleDeleteConnection}
-                  className="py-4 bg-rose-600 text-white rounded-2xl font-bold shadow-lg shadow-rose-100 hover:bg-rose-700 transition-all active:scale-95"
-                >
-                  قطع اتصال
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Division Action Modal (Delete/Edit) */}
-      <AnimatePresence>
-        {pendingDivisionAction && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4" dir="rtl">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-[32px] shadow-2xl w-full max-w-md overflow-hidden"
-            >
-              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-                <h2 className="text-xl font-bold text-slate-900">مدیریت سهم اراضی</h2>
-                <button onClick={() => setPendingDivisionAction(null)} className="p-2 hover:bg-slate-100 rounded-full">
-                  <X className="w-5 h-5 text-slate-400" />
-                </button>
-              </div>
-
-              <div className="p-8">
-                {pendingDivisionAction.type === 'DELETE' ? (
-                  <div className="text-center">
-                    <div className="bg-rose-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
-                      <Trash2 className="w-8 h-8 text-rose-600" />
-                    </div>
-                    <p className="text-slate-700 font-medium mb-8">آیا مایل به حذف کامل این سهم از قطعه زمین هستید؟</p>
-                    
-                    <div className="grid grid-cols-2 gap-3">
-                      <button 
-                        onClick={() => setPendingDivisionAction(prev => prev ? { ...prev, type: 'EDIT' } : null)}
-                        className="py-4 bg-blue-50 text-blue-600 rounded-2xl font-bold hover:bg-blue-100 transition-colors flex items-center justify-center gap-2"
-                      >
-                        <RotateCw className="w-5 h-5" />
-                        ویرایش درصد
-                      </button>
-                      <button 
-                        onClick={handleDeleteDivision}
-                        className="py-4 bg-rose-600 text-white rounded-2xl font-bold shadow-lg shadow-rose-100 hover:bg-rose-700 transition-all active:scale-95"
-                      >
-                        حذف قطعی
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-6">
-                    <div>
-                      <label className="block text-sm font-bold text-slate-700 mb-2">درصد جدید سهم (٪)</label>
-                      <input 
-                        type="number"
-                        value={editPercentage}
-                        onChange={(e) => setEditPercentage(e.target.value)}
-                        className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-4 py-4 focus:border-blue-500 focus:outline-none transition-colors text-xl font-mono"
-                        placeholder="مثلاً: ۲۵"
-                        autoFocus
-                      />
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-3">
-                      <button 
-                        onClick={() => setPendingDivisionAction(prev => prev ? { ...prev, type: 'DELETE' } : null)}
-                        className="py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-colors"
-                      >
-                        بازگشت
-                      </button>
-                      <button 
-                        onClick={handleUpdateDivision}
-                        className="py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all active:scale-95"
-                      >
-                        بروزرسانی سهم
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Backup Modal */}
-      <BackupModal 
-        isOpen={showBackupModal}
-        onClose={() => setShowBackupModal(false)}
-        points={points}
-        connections={connections}
-        parcels={parcels}
-        onRestore={handleRestore}
-      />
-
-      {/* Convert Share Modal */}
-      {selectedParcelForConversion && selectedDivisionForConversion && (
-        <ConvertModal
-          isOpen={showConvertModal}
-          onClose={() => setShowConvertModal(false)}
-          parcel={selectedParcelForConversion}
-          division={selectedDivisionForConversion}
-          points={points}
-          onConvert={handleConvertShare}
-        />
-      )}
-
-      {/* Rotation Tool Modal */}
-      <RotationModal 
-        isOpen={showRotationModal}
-        onClose={() => {
-          setShowRotationModal(false);
-          if (mode === 'ROTATE') setMode('VIEW');
-        }}
-        angle={rotationAngle}
-        onAngleChange={(newAngle) => {
-          setRotationAngle(newAngle);
-          if (selectedParcelForRotation) {
-            handleUpdateParcelAngle(selectedParcelForRotation.id, newAngle);
-          }
-        }}
-        parcelName={selectedParcelForRotation?.name}
-      />
     </div>
   );
 }
