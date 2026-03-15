@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, Marker, Polyline, Circle, Polygon, Tooltip, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import * as turf from '@turf/turf';
@@ -31,6 +32,7 @@ interface MapViewProps {
   userLocation?: { lat: number; lng: number; accuracy: number };
   showUserLocation: boolean;
   selectedPointId: string | null;
+  trackingTargetId?: string | null;
   centerTrigger?: number; // Used to trigger centering
   parcels?: Parcel[];
   generationFilter?: number;
@@ -38,6 +40,7 @@ interface MapViewProps {
 }
 
 // Find all simple cycles in the graph of connections
+// For planar graphs, we want the "minimal" cycles (faces)
 function findCycles(points: Point[], connections: Connection[]): Point[][] {
   const adj = new Map<string, string[]>();
   connections.forEach(c => {
@@ -48,38 +51,40 @@ function findCycles(points: Point[], connections: Connection[]): Point[][] {
   });
 
   const cycles: string[][] = [];
-  const visited = new Set<string>();
+  const pointIds = Array.from(adj.keys());
 
-  const findCycleDFS = (u: string, p: string, path: string[]) => {
-    visited.add(u);
-    path.push(u);
-
-    const neighbors = adj.get(u) || [];
-    for (const v of neighbors) {
-      if (v === p) continue;
-      if (path.includes(v)) {
-        // Cycle found
-        const cycle = path.slice(path.indexOf(v));
+  // To find all minimal cycles, we can start a DFS from every node
+  // and limit the search depth or use a more exhaustive approach
+  const findFromNode = (startNode: string) => {
+    const stack: { u: string; p: string; path: string[] }[] = [{ u: startNode, p: '', path: [] }];
+    
+    while (stack.length > 0) {
+      const { u, p, path } = stack.pop()!;
+      
+      if (path.includes(u)) {
+        const cycle = path.slice(path.indexOf(u));
         if (cycle.length >= 3) {
-          // Check if this cycle is already found (simple check)
           const sortedCycle = [...cycle].sort().join(',');
           if (!cycles.some(c => [...c].sort().join(',') === sortedCycle)) {
             cycles.push(cycle);
           }
         }
-      } else if (!visited.has(v)) {
-        findCycleDFS(v, u, [...path]);
+        continue;
+      }
+
+      if (path.length > 15) continue; // Limit depth to prevent infinite loops/performance issues
+
+      const neighbors = adj.get(u) || [];
+      for (const v of neighbors) {
+        if (v === p) continue;
+        stack.push({ u: v, p: u, path: [...path, u] });
       }
     }
   };
 
-  const pointIds = Array.from(adj.keys());
-  pointIds.forEach(id => {
-    if (!visited.has(id)) {
-      findCycleDFS(id, '', []);
-    }
-  });
+  pointIds.forEach(id => findFromNode(id));
 
+  // Return all discovered cycles
   return cycles.map(cycleIds => 
     cycleIds.map(id => points.find(p => p.id === id)!).filter(Boolean)
   );
@@ -185,6 +190,7 @@ export default function MapView({
   userLocation,
   showUserLocation,
   selectedPointId,
+  trackingTargetId,
   centerTrigger,
   parcels = [],
   generationFilter = 1,
@@ -193,6 +199,20 @@ export default function MapView({
   
   const cycles = findCycles(points, connections);
   const [zoom, setZoom] = useState(13);
+
+  const trackingTarget = useMemo(() => 
+    trackingTargetId ? points.find(p => p.id === trackingTargetId) : null
+  , [trackingTargetId, points]);
+
+  const trackingDistance = useMemo(() => {
+    if (userLocation && trackingTarget) {
+      const from = turf.point([userLocation.lng, userLocation.lat]);
+      const to = turf.point([trackingTarget.lng, trackingTarget.lat]);
+      return turf.distance(from, to, { units: 'meters' });
+    }
+    return null;
+  }, [userLocation, trackingTarget]);
+
   const longPressTimer = React.useRef<NodeJS.Timeout | null>(null);
 
   // Calculate generations for each cycle/parcel
@@ -223,25 +243,25 @@ export default function MapView({
       const parcelId = item.cycle.map(p => p.id).sort().join(',');
       const existingParcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
       
-      let gen = existingParcel?.generation || 1;
+      let gen = existingParcel?.generation;
       
-      if (!existingParcel?.generation) {
-        // Fallback to containment logic if generation not explicitly set
+      if (!gen) {
+        // Count how many other polygons contain this one
+        let containers = 0;
         for (const other of polys) {
           if (item === other) continue;
-          if (turf.booleanContains(other.poly, item.poly)) {
-            gen = 2;
-            for (const third of polys) {
-              if (third === other || third === item) continue;
-              if (turf.booleanContains(third.poly, other.poly)) {
-                gen = 3;
-                break;
-              }
+          // Use a small buffer to handle shared edges
+          try {
+            if (turf.booleanContains(other.poly, item.poly)) {
+              containers++;
             }
-            if (gen === 2) break;
+          } catch (e) {
+            // Turf might fail on some complex geometries
           }
         }
+        gen = containers + 1;
       }
+      
       return { ...item, gen, layerId: `layer-gen-${gen}` };
     });
   }, [cycles, connections, parcels]);
@@ -398,7 +418,14 @@ export default function MapView({
                   >
                     <span className="text-[10px] text-slate-500 font-bold">مساحت قطعه</span>
                     <div className="flex items-baseline gap-0.5">
-                      <span className="text-sm font-mono font-bold text-slate-700">{area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</span>
+                      <span className="text-sm font-mono font-bold text-slate-700">
+                        {(() => {
+                          const integerPart = Math.floor(area);
+                          const decimalPart = Math.round((area - integerPart) * 100);
+                          if (decimalPart === 0) return integerPart.toLocaleString('fa-IR');
+                          return `${integerPart.toLocaleString('fa-IR')}/${decimalPart.toLocaleString('fa-IR')}`;
+                        })()}
+                      </span>
                       <span className="text-[8px] text-slate-600 font-bold">متر مربع</span>
                     </div>
                   </div>
@@ -533,7 +560,49 @@ export default function MapView({
 
         {renderConnections()}
         {renderPolygons()}
+
+        {/* Tracking Line and Distance */}
+        {mode === 'TRACKING' && userLocation && trackingTarget && (
+          <>
+            <Polyline 
+              positions={[
+                [userLocation.lat, userLocation.lng],
+                [trackingTarget.lat, trackingTarget.lng]
+              ]}
+              pathOptions={{ color: '#f59e0b', weight: 3, dashArray: '10, 10', opacity: 0.8 }}
+            />
+          </>
+        )}
       </MapContainer>
+
+      {/* Tracking Distance Overlay */}
+      <AnimatePresence>
+        {mode === 'TRACKING' && trackingDistance !== null && (
+          <motion.div
+            initial={{ y: 50, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 50, opacity: 0 }}
+            className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[2000] bg-white/90 backdrop-blur-md px-6 py-4 rounded-[32px] border border-amber-200 shadow-2xl flex flex-col items-center min-w-[200px]"
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-2 h-2 bg-amber-500 rounded-full animate-pulse" />
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">فاصله تا هدف (میخ)</span>
+            </div>
+            <div className="flex items-baseline gap-1">
+              <span className="text-3xl font-black text-slate-900 tabular-nums">
+                {(() => {
+                  const integerPart = Math.floor(trackingDistance);
+                  const decimalPart = Math.round((trackingDistance - integerPart) * 100);
+                  if (decimalPart === 0) return integerPart.toLocaleString('fa-IR');
+                  return `${integerPart.toLocaleString('fa-IR')}/${decimalPart.toLocaleString('fa-IR')}`;
+                })()}
+              </span>
+              <span className="text-xs font-bold text-slate-600">متر</span>
+            </div>
+            <p className="text-[9px] text-slate-400 mt-2 font-medium">برای دقت بیشتر، به آرامی حرکت کنید</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

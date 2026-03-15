@@ -55,6 +55,7 @@ export default function App() {
   const [mode, setMode] = useState<AppMode>('VIEW');
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number; accuracy: number }>();
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
+  const [trackingTargetId, setTrackingTargetId] = useState<string | null>(null);
   const [showRecorder, setShowRecorder] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [centerTrigger, setCenterTrigger] = useState(0);
@@ -148,11 +149,22 @@ export default function App() {
 
   const handleRecorderConfirm = (data: Omit<Point, 'id' | 'timestamp'>) => {
     if (isUpdating && selectedPointId) {
-      setPoints(prev => prev.map(p => p.id === selectedPointId ? {
+      const updatedPoints = points.map(p => p.id === selectedPointId ? {
         ...p,
         ...data,
         timestamp: Date.now()
-      } : p));
+      } : p);
+      
+      setPoints(updatedPoints);
+      
+      // Update all parcels that use this point to maintain geometric integrity
+      setParcels(prev => prev.map(parcel => {
+        if (parcel.pointIds.includes(selectedPointId)) {
+          return recalculateParcelDivisions(parcel, parcel.divisions, updatedPoints);
+        }
+        return parcel;
+      }));
+      
       setIsUpdating(false);
     } else {
       const newPoint: Point = {
@@ -167,6 +179,11 @@ export default function App() {
   };
 
   const handlePointClick = (point: Point) => {
+    if (mode === 'TRACKING') {
+      setTrackingTargetId(point.id);
+      setSelectedPointId(point.id);
+      return;
+    }
     if (mode === 'CONNECT') {
       if (selectedPointId && selectedPointId !== point.id) {
         // Create connection from selected to clicked
@@ -444,8 +461,9 @@ export default function App() {
     }
   };
 
-  const recalculateParcelDivisions = (parcel: Parcel, updatedDivisions: Division[]): Parcel => {
-    const cycle = parcel.pointIds.map(id => points.find(p => p.id === id)!).filter(Boolean);
+  const recalculateParcelDivisions = (parcel: Parcel, updatedDivisions: Division[], latestPoints?: Point[]): Parcel => {
+    const pts = latestPoints || points;
+    const cycle = parcel.pointIds.map(id => pts.find(p => p.id === id)!).filter(Boolean);
     if (cycle.length < 3) return parcel;
 
     const parcelAngle = parcel.angle || 0;
@@ -600,7 +618,16 @@ export default function App() {
     setShowRecorder(true);
   };
 
+  useEffect(() => {
+    if (mode === 'TRACKING') {
+      setShowUserLocation(true);
+    } else {
+      setTrackingTargetId(null);
+    }
+  }, [mode]);
+
   const selectedPoint = points.find(p => p.id === selectedPointId);
+  const trackingTarget = points.find(p => p.id === trackingTargetId);
 
   return (
     <div className="flex flex-col h-screen w-full bg-slate-50 overflow-hidden font-sans" dir="rtl">
@@ -743,6 +770,7 @@ export default function App() {
           onPointClick={handlePointClick}
           onMapClick={() => {
             setSelectedPointId(null);
+            if (mode === 'TRACKING') setTrackingTargetId(null);
             if (isSearchActive && !searchQuery) setIsSearchActive(false);
           }}
           onConnectionClick={handleConnectionClick}
@@ -761,6 +789,7 @@ export default function App() {
           userLocation={userLocation}
           showUserLocation={showUserLocation}
           selectedPointId={selectedPointId}
+          trackingTargetId={trackingTargetId}
           centerTrigger={centerTrigger}
           parcels={parcels}
           generationFilter={generationFilter}
@@ -805,6 +834,17 @@ export default function App() {
             </>
           )}
           
+          <button 
+            onClick={() => setMode('TRACKING')}
+            className={cn(
+              "p-3 rounded-2xl shadow-xl transition-all",
+              mode === 'TRACKING' ? "bg-amber-600 text-white" : "bg-white text-slate-600"
+            )}
+            title="حالت ردیابی و یافتن میخ"
+          >
+            <Crosshair className="w-6 h-6" />
+          </button>
+
           <div className="h-px bg-slate-200 my-1" />
 
           <button 

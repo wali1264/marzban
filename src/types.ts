@@ -44,4 +44,4 @@ export interface Parcel {
   generation?: number; // 1 for root, 2 for nested, etc.
 }
 
-export type AppMode = 'VIEW' | 'RECORD' | 'CONNECT' | 'EDIT' | 'DIVIDE' | 'MANAGE' | 'CONVERT' | 'ROTATE';
+export type AppMode = 'VIEW' | 'RECORD' | 'CONNECT' | 'EDIT' | 'DIVIDE' | 'MANAGE' | 'CONVERT' | 'ROTATE' | 'TRACKING';
