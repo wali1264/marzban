@@ -37,13 +37,15 @@ import {
   KeyRound,
   Database,
   Zap,
-  RotateCcw
+  RotateCcw,
+  Printer
 } from 'lucide-react';
 import * as turf from '@turf/turf';
 import MapView from './components/Map/MapView';
 import PrecisionRecorder from './components/Recorder/PrecisionRecorder';
 import BackupModal from './components/Backup/BackupModal';
 import ConvertModal from './components/Convert/ConvertModal';
+import DigitalCertificateModal from './components/Map/DigitalCertificateModal';
 import { RotationModal } from './components/Map/RotationModal';
 import { Point, Connection, AppMode, Parcel, Partner, Division } from './types';
 import { cn } from './utils';
@@ -75,6 +77,8 @@ export default function App() {
   const [ownerNameInput, setOwnerNameInput] = useState('');
 
   const [isSearchActive, setIsSearchActive] = useState(false);
+  const [isPrintMode, setIsPrintMode] = useState(false);
+  const [selectedParcelForCertificate, setSelectedParcelForCertificate] = useState<Parcel | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isGenMenuOpen, setIsGenMenuOpen] = useState(false);
   const [highlightedParcelId, setHighlightedParcelId] = useState<string | null>(null);
@@ -891,12 +895,12 @@ export default function App() {
                       <button
                         key={parcel.id}
                         onClick={() => {
-                          setHighlightedParcelId(parcel.id);
-                          setCenterTrigger(prev => prev + 1);
-                          // Zoom to parcel logic: we need to find the center of the parcel
-                          // MapView handles centering via centerTrigger, but we need to tell it which point to center on
-                          // For now, MapView centers on user location if available, or just triggers a re-render
-                          // I'll update MapView to handle centering on a specific parcel if highlightedParcelId is set
+                          if (isPrintMode) {
+                            setSelectedParcelForCertificate(parcel);
+                          } else {
+                            setHighlightedParcelId(parcel.id);
+                            setCenterTrigger(prev => prev + 1);
+                          }
                         }}
                         className={cn(
                           "w-full px-5 py-4 text-right flex items-center justify-between border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors",
@@ -905,9 +909,12 @@ export default function App() {
                       >
                         <div className="flex flex-col items-start text-right w-full">
                           <span className="font-bold text-sm">{parcel.ownerName}</span>
-                          <span className="text-[10px] text-slate-400">قطعه زمین شماره {parcel.id.slice(0, 4)}</span>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[10px] text-slate-400">مساحت: {parcel.area.toFixed(1)} متر مربع</span>
+                            <span className="text-[10px] text-indigo-400 font-bold bg-indigo-50 px-1.5 py-0.5 rounded-md">نسل {parcel.generation || 1}</span>
+                          </div>
                         </div>
-                        <Navigation className="w-4 h-4 text-slate-300" />
+                        {isPrintMode ? <Printer className="w-4 h-4 text-slate-400" /> : <Navigation className="w-4 h-4 text-slate-300" />}
                       </button>
                     ))
                 ) : (
@@ -946,9 +953,21 @@ export default function App() {
                   dir="rtl"
                 />
                 {searchQuery && (
-                  <button onClick={() => { setSearchQuery(''); setHighlightedParcelId(null); }}>
-                    <X className="w-4 h-4 text-slate-400" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={() => setIsPrintMode(!isPrintMode)}
+                      className={cn(
+                        "p-1.5 rounded-lg transition-colors",
+                        isPrintMode ? "bg-slate-800 text-white" : "text-slate-400 hover:bg-slate-200"
+                      )}
+                      title="حالت چاپ سند"
+                    >
+                      <Printer className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => { setSearchQuery(''); setHighlightedParcelId(null); }}>
+                      <X className="w-4 h-4 text-slate-400" />
+                    </button>
+                  </div>
                 )}
               </div>
             )}
@@ -1638,6 +1657,18 @@ export default function App() {
         }}
         parcelName={selectedParcelForRotation?.name}
       />
+
+      {/* Digital Certificate Modal */}
+      <AnimatePresence>
+        {selectedParcelForCertificate && (
+          <DigitalCertificateModal 
+            parcel={selectedParcelForCertificate}
+            allParcels={parcels}
+            allPoints={points}
+            onClose={() => setSelectedParcelForCertificate(null)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
