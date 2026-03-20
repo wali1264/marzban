@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   MapPin, 
@@ -79,8 +79,11 @@ export default function App() {
   const [isGenMenuOpen, setIsGenMenuOpen] = useState(false);
   const [highlightedParcelId, setHighlightedParcelId] = useState<string | null>(null);
 
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(true);
   const [showAdminModal, setShowAdminModal] = useState(false);
+  const [isAreaMode, setIsAreaMode] = useState(false);
+  const [isEditAreaMode, setIsEditAreaMode] = useState(false);
+  const [shareInputValue, setShareInputValue] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
   const [loginError, setLoginError] = useState(false);
 
@@ -516,7 +519,12 @@ export default function App() {
   const handleUpdateDivision = () => {
     if (pendingDivisionAction && editPercentage) {
       const { parcelId, divId } = pendingDivisionAction;
-      const newPercent = parseFloat(editPercentage);
+      let newPercent = parseFloat(editPercentage);
+      
+      const targetParcel = parcels.find(p => p.id === parcelId);
+      if (isEditAreaMode && targetParcel && targetParcel.area > 0) {
+        newPercent = (newPercent / targetParcel.area) * 100;
+      }
       
       setParcels(prev => prev.map(p => {
         if (p.id !== parcelId) return p;
@@ -538,6 +546,7 @@ export default function App() {
       }));
       setPendingDivisionAction(null);
       setEditPercentage('');
+      setIsEditAreaMode(false);
     }
   };
 
@@ -628,6 +637,19 @@ export default function App() {
 
   const selectedPoint = points.find(p => p.id === selectedPointId);
   const trackingTarget = points.find(p => p.id === trackingTargetId);
+
+  const selectedParcelArea = useMemo(() => {
+    if (!selectedCycle || selectedCycle.length < 3) return 0;
+    try {
+      const poly = turf.polygon([[...selectedCycle.map(p => [p.lng, p.lat]), [selectedCycle[0].lng, selectedCycle[0].lat]]]);
+      return turf.area(poly);
+    } catch (e) {
+      return 0;
+    }
+  }, [selectedCycle]);
+
+  const editingParcel = pendingDivisionAction ? parcels.find(p => p.id === pendingDivisionAction.parcelId) : null;
+  const editingParcelArea = editingParcel?.area || 0;
 
   return (
     <div className="flex flex-col h-screen w-full bg-slate-50 overflow-hidden font-sans" dir="rtl">
@@ -740,24 +762,6 @@ export default function App() {
                </button>
              </div>
            )}
-
-           <button 
-             onClick={() => {
-               if (isAdmin) {
-                 setIsAdmin(false);
-                 setMode('VIEW');
-               } else {
-                 setShowAdminModal(true);
-               }
-             }}
-             className={cn(
-               "p-2 rounded-full transition-all duration-300",
-               isAdmin ? "bg-emerald-100 text-emerald-600" : "bg-slate-100 text-slate-400 hover:bg-slate-200"
-             )}
-             title={isAdmin ? "خروج از مدیریت" : "ورود مدیر"}
-           >
-             {isAdmin ? <ShieldCheck className="w-5 h-5" /> : <Lock className="w-5 h-5" />}
-           </button>
         </div>
       </header>
 
@@ -1082,11 +1086,17 @@ export default function App() {
                 <form onSubmit={(e) => {
                   e.preventDefault();
                   const formData = new FormData(e.currentTarget);
-                  handleAddDivision(
-                    formData.get('name') as string,
-                    Number(formData.get('percentage')),
-                    formData.get('orientation') as 'HORIZONTAL' | 'VERTICAL'
-                  );
+                  const name = formData.get('name') as string;
+                  const orientation = formData.get('orientation') as 'HORIZONTAL' | 'VERTICAL';
+                  const rawValue = Number(shareInputValue);
+                  
+                  let percentage = rawValue;
+                  if (isAreaMode && selectedParcelArea > 0) {
+                    percentage = (rawValue / selectedParcelArea) * 100;
+                  }
+
+                  handleAddDivision(name, percentage, orientation);
+                  setShareInputValue('');
                 }}>
                   <div className="space-y-4">
                     <div>
@@ -1099,16 +1109,32 @@ export default function App() {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-bold text-slate-700 mb-2">درصد سهم (٪)</label>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-sm font-bold text-slate-700">
+                          {isAreaMode ? "مساحت سهم (متر مربع)" : "درصد سهم (٪)"}
+                        </label>
+                        <button 
+                          type="button"
+                          onClick={() => setIsAreaMode(!isAreaMode)}
+                          className="text-[10px] font-bold px-2 py-1 rounded-lg bg-amber-100 text-amber-600 hover:bg-amber-200 transition-colors"
+                        >
+                          {isAreaMode ? "تغییر به درصد" : "تغییر به متر مربع"}
+                        </button>
+                      </div>
                       <input 
-                        name="percentage"
+                        value={shareInputValue}
+                        onChange={(e) => setShareInputValue(e.target.value)}
                         type="number"
-                        min="1"
-                        max="100"
+                        step="0.01"
                         required
                         className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-4 py-3 focus:border-blue-500 focus:outline-none transition-colors"
-                        placeholder="مثلاً: ۵۰"
+                        placeholder={isAreaMode ? "مثلاً: ۵۰۰" : "مثلاً: ۲۵"}
                       />
+                      {isAreaMode && selectedParcelArea > 0 && shareInputValue && (
+                        <p className="mt-2 text-[10px] text-indigo-600 font-bold bg-indigo-50 p-2 rounded-xl">
+                          محاسبه خودکار: {((Number(shareInputValue) / selectedParcelArea) * 100).toFixed(2)}٪ از کل {selectedParcelArea.toFixed(1)} متر مربع
+                        </p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-sm font-bold text-slate-700 mb-2">جهت تقسیم</label>
@@ -1522,15 +1548,32 @@ export default function App() {
                 ) : (
                   <div className="space-y-6">
                     <div>
-                      <label className="block text-sm font-bold text-slate-700 mb-2">درصد جدید سهم (٪)</label>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-sm font-bold text-slate-700">
+                          {isEditAreaMode ? "مساحت جدید سهم (متر مربع)" : "درصد جدید سهم (٪)"}
+                        </label>
+                        <button 
+                          type="button"
+                          onClick={() => setIsEditAreaMode(!isEditAreaMode)}
+                          className="text-[10px] font-bold px-2 py-1 rounded-lg bg-amber-100 text-amber-600 hover:bg-amber-200 transition-colors"
+                        >
+                          {isEditAreaMode ? "تغییر به درصد" : "تغییر به متر مربع"}
+                        </button>
+                      </div>
                       <input 
                         type="number"
+                        step="0.01"
                         value={editPercentage}
                         onChange={(e) => setEditPercentage(e.target.value)}
                         className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-4 py-4 focus:border-blue-500 focus:outline-none transition-colors text-xl font-mono"
-                        placeholder="مثلاً: ۲۵"
+                        placeholder={isEditAreaMode ? "مثلاً: ۵۰۰" : "مثلاً: ۲۵"}
                         autoFocus
                       />
+                      {isEditAreaMode && editingParcelArea > 0 && editPercentage && (
+                        <p className="mt-2 text-[10px] text-indigo-600 font-bold bg-indigo-50 p-2 rounded-xl">
+                          محاسبه خودکار: {((Number(editPercentage) / editingParcelArea) * 100).toFixed(2)}٪ از کل {editingParcelArea.toFixed(1)} متر مربع
+                        </p>
+                      )}
                     </div>
                     
                     <div className="grid grid-cols-2 gap-3">
