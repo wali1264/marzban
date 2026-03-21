@@ -33,8 +33,7 @@ interface MapViewProps {
   showUserLocation: boolean;
   selectedPointId: string | null;
   trackingTargetId?: string | null;
-  centerTrigger?: number;
-  parcelCenterTrigger?: number;
+  centerTrigger?: number; // Used to trigger centering
   parcels?: Parcel[];
   generationFilter?: number;
   highlightedParcelId?: string | null;
@@ -73,7 +72,7 @@ function findCycles(points: Point[], connections: Connection[]): Point[][] {
         continue;
       }
 
-      if (path.length > 50) continue; // Limit depth to prevent infinite loops/performance issues
+      if (path.length > 200) continue; // Limit depth to prevent infinite loops/performance issues
 
       const neighbors = adj.get(u) || [];
       for (const v of neighbors) {
@@ -126,7 +125,6 @@ interface MapControllerProps {
   highlightedParcelCenter?: { lat: number; lng: number };
   highlightedParcelId?: string | null;
   centerTrigger?: number;
-  parcelCenterTrigger?: number;
 }
 
 function MapController({ 
@@ -134,13 +132,11 @@ function MapController({
   points,
   highlightedParcelCenter,
   highlightedParcelId,
-  centerTrigger,
-  parcelCenterTrigger
+  centerTrigger
 }: MapControllerProps) {
   const map = useMap();
   const [hasInitialFit, setHasInitialFit] = useState(false);
   const lastTrigger = useRef<number>(0);
-  const lastParcelTrigger = useRef<number>(0);
 
   // Initial fit to points - only once
   useEffect(() => {
@@ -154,15 +150,14 @@ function MapController({
   // Manual center on user or highlighted parcel
   useEffect(() => {
     // If we have a highlighted parcel and it's a new trigger or new ID
-    if (highlightedParcelId && highlightedParcelCenter && parcelCenterTrigger !== lastParcelTrigger.current) {
+    if (highlightedParcelId && highlightedParcelCenter) {
       map.setView([highlightedParcelCenter.lat, highlightedParcelCenter.lng], 18);
-      lastParcelTrigger.current = parcelCenterTrigger || 0;
-    } else if (centerOn && centerTrigger !== lastTrigger.current) {
+      lastTrigger.current = centerTrigger || 0;
+    } else if (centerOn) {
       // Manual center trigger (e.g. user location button)
       map.setView([centerOn.lat, centerOn.lng], map.getZoom() > 18 ? map.getZoom() : 18);
-      lastTrigger.current = centerTrigger || 0;
     }
-  }, [centerOn, highlightedParcelCenter, highlightedParcelId, map, centerTrigger, parcelCenterTrigger]);
+  }, [centerOn, highlightedParcelCenter, highlightedParcelId, map, centerTrigger]);
 
   return null;
 }
@@ -195,13 +190,12 @@ export default function MapView({
   selectedPointId,
   trackingTargetId,
   centerTrigger,
-  parcelCenterTrigger,
   parcels = [],
   generationFilter = 1,
   highlightedParcelId = null
 }: MapViewProps) {
   
-  const cycles = useMemo(() => findCycles(points, connections), [points, connections]);
+  const cycles = findCycles(points, connections);
   const [zoom, setZoom] = useState(13);
 
   const trackingTarget = useMemo(() => 
@@ -222,19 +216,13 @@ export default function MapView({
   // Calculate generations for each cycle/parcel
   const cyclesWithGen = useMemo(() => {
     const polys = cycles.map(cycle => {
-      if (cycle.length < 3) return null;
-      try {
-        const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
-        return { 
-          cycle, 
-          poly: turf.polygon([coords as any]),
-          connectionIds: new Set<string>()
-        };
-      } catch (e) {
-        console.error("Error creating polygon for cycle:", e);
-        return null;
-      }
-    }).filter((p): p is NonNullable<typeof p> => p !== null);
+      const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
+      return { 
+        cycle, 
+        poly: turf.polygon([coords as any]),
+        connectionIds: new Set<string>()
+      };
+    });
 
     // Map connections to their IDs for easy lookup
     polys.forEach(item => {
@@ -251,7 +239,7 @@ export default function MapView({
 
     return polys.map(item => {
       const parcelId = item.cycle.map(p => p.id).sort().join(',');
-      const existingParcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+      const existingParcel = parcels.find(p => [...p.pointIds].sort().join(',') === parcelId);
       
       let gen = existingParcel?.generation;
       
@@ -494,15 +482,20 @@ export default function MapView({
 
   const highlightedParcelCenter = useMemo(() => {
     if (!highlightedParcelId) return null;
-    const item = cyclesWithGen.find(c => {
-      const parcelId = c.cycle.map(p => p.id).sort().join(',');
-      const parcel = parcels?.find(p => p.pointIds.sort().join(',') === parcelId);
-      return parcel?.id === highlightedParcelId;
-    });
-    if (!item) return null;
-    const centroid = turf.centroid(item.poly);
-    return { lat: centroid.geometry.coordinates[1], lng: centroid.geometry.coordinates[0] };
-  }, [highlightedParcelId, cyclesWithGen, parcels]);
+    
+    // Direct lookup by ID is more reliable and avoids mutation issues
+    const parcel = parcels.find(p => p.id === highlightedParcelId);
+    if (!parcel) return null;
+
+    const parcelPoints = parcel.pointIds
+      .map(id => points.find(p => p.id === id))
+      .filter((p): p is Point => !!p);
+
+    if (parcelPoints.length < 3) return null;
+
+    const [lat, lng] = getCentroid(parcelPoints);
+    return { lat, lng };
+  }, [highlightedParcelId, parcels, points]);
 
   const centerOn = useMemo(() => {
     if (centerTrigger && userLocation) return userLocation;
@@ -532,7 +525,6 @@ export default function MapView({
           highlightedParcelCenter={highlightedParcelCenter || undefined}
           highlightedParcelId={highlightedParcelId}
           centerTrigger={centerTrigger}
-          parcelCenterTrigger={parcelCenterTrigger}
         />
         
         {/* Live User Location - Only shown if toggled ON */}

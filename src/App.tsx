@@ -61,7 +61,6 @@ export default function App() {
   const [showRecorder, setShowRecorder] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [centerTrigger, setCenterTrigger] = useState(0);
-  const [parcelCenterTrigger, setParcelCenterTrigger] = useState(0);
   const [showUserLocation, setShowUserLocation] = useState(false);
 
   const [parcels, setParcels] = useState<Parcel[]>([]);
@@ -83,7 +82,6 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isGenMenuOpen, setIsGenMenuOpen] = useState(false);
   const [highlightedParcelId, setHighlightedParcelId] = useState<string | null>(null);
-  const APP_VERSION = '1.0.1'; // Increment this to force data migration/refresh
 
   const [isAdmin, setIsAdmin] = useState(true);
   const [showAdminModal, setShowAdminModal] = useState(false);
@@ -105,6 +103,8 @@ export default function App() {
   const [selectedParcelForConversion, setSelectedParcelForConversion] = useState<Parcel | null>(null);
   const [selectedDivisionForConversion, setSelectedDivisionForConversion] = useState<Division | null>(null);
 
+  const APP_VERSION = '1.1.0';
+
   // Load from local storage on mount
   useEffect(() => {
     const savedPoints = localStorage.getItem('marzban_points');
@@ -112,22 +112,48 @@ export default function App() {
     const savedParcels = localStorage.getItem('marzban_parcels');
     const savedVersion = localStorage.getItem('marzban_version');
 
-    if (savedPoints) setPoints(JSON.parse(savedPoints));
-    if (savedConnections) setConnections(JSON.parse(savedConnections));
-    if (savedParcels) {
-      const parsedParcels = JSON.parse(savedParcels);
-      // Data migration: Ensure all parcels have required fields
-      const migratedParcels = parsedParcels.map((p: any) => ({
-        ...p,
-        ownerName: p.ownerName || '',
-        generation: p.generation || 1,
-        divisions: p.divisions || []
-      }));
-      setParcels(migratedParcels);
-    }
+    let parsedPoints: Point[] = savedPoints ? JSON.parse(savedPoints) : [];
+    let parsedConnections: Connection[] = savedConnections ? JSON.parse(savedConnections) : [];
+    let parsedParcels: Parcel[] = savedParcels ? JSON.parse(savedParcels) : [];
 
-    // If version mismatch, we could perform more complex migrations here
-    localStorage.setItem('marzban_version', APP_VERSION);
+    // Data Sanitization & Migration
+    let needsSave = false;
+    parsedParcels = parsedParcels.map((p: any) => {
+      let updated = false;
+      // Ensure area exists
+      if (p.area === undefined || p.area === null) {
+        try {
+          const cycle = p.pointIds.map((id: string) => parsedPoints.find((pt: any) => pt.id === id)).filter(Boolean);
+          if (cycle.length >= 3) {
+            const poly = turf.polygon([[...cycle.map((pt: any) => [pt.lng, pt.lat]), [cycle[0].lng, cycle[0].lat]]]);
+            p.area = turf.area(poly);
+          } else {
+            p.area = 0;
+          }
+        } catch (e) {
+          p.area = 0;
+        }
+        updated = true;
+      }
+      // Ensure generation exists
+      if (p.generation === undefined || p.generation === null) {
+        p.generation = 1;
+        updated = true;
+      }
+      if (updated) needsSave = true;
+      return p;
+    });
+
+    setPoints(parsedPoints);
+    setConnections(parsedConnections);
+    setParcels(parsedParcels);
+    
+    if (savedVersion !== APP_VERSION || needsSave) {
+      localStorage.setItem('marzban_version', APP_VERSION);
+      localStorage.setItem('marzban_points', JSON.stringify(parsedPoints));
+      localStorage.setItem('marzban_connections', JSON.stringify(parsedConnections));
+      localStorage.setItem('marzban_parcels', JSON.stringify(parsedParcels));
+    }
   }, []);
 
   const [hasZoomedForLocation, setHasZoomedForLocation] = useState(false);
@@ -672,15 +698,6 @@ export default function App() {
   const editingParcel = pendingDivisionAction ? parcels.find(p => p.id === pendingDivisionAction.parcelId) : null;
   const editingParcelArea = editingParcel?.area || 0;
 
-  const searchResults = useMemo(() => {
-    if (!searchQuery.trim()) return [];
-    const query = searchQuery.toLowerCase();
-    return parcels.filter(p => 
-      (p.ownerName || '').toLowerCase().includes(query) || 
-      (p.id || '').toLowerCase().includes(query)
-    );
-  }, [parcels, searchQuery]);
-
   return (
     <div className="flex flex-col h-screen w-full bg-slate-50 overflow-hidden font-sans" dir="rtl">
       {/* Header */}
@@ -825,7 +842,6 @@ export default function App() {
           selectedPointId={selectedPointId}
           trackingTargetId={trackingTargetId}
           centerTrigger={centerTrigger}
-          parcelCenterTrigger={parcelCenterTrigger}
           parcels={parcels}
           generationFilter={generationFilter}
           highlightedParcelId={highlightedParcelId}
@@ -915,38 +931,37 @@ export default function App() {
                 exit={{ y: 20, opacity: 0 }}
                 className="bg-white/95 backdrop-blur-md border border-slate-200 rounded-3xl shadow-2xl w-full max-w-md overflow-hidden max-h-60 overflow-y-auto"
               >
-                {searchResults.length > 0 ? (
-                  searchResults.map(parcel => (
-                    <button
-                      key={parcel.id}
-                      onClick={() => {
-                        if (isPrintMode) {
-                          setSelectedParcelForCertificate(parcel);
-                        } else {
-                          setHighlightedParcelId(parcel.id);
-                          setParcelCenterTrigger(prev => prev + 1);
-                          setIsSearchActive(false);
-                          setSearchQuery('');
-                        }
-                      }}
-                      className={cn(
-                        "w-full px-5 py-4 text-right flex items-center justify-between border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors",
-                        highlightedParcelId === parcel.id ? "bg-emerald-50 text-emerald-700" : "text-slate-700"
-                      )}
-                    >
-                      <div className="flex flex-col items-start text-right w-full">
-                        <div className="flex items-center justify-between w-full">
-                          <span className="font-bold text-sm">{parcel.ownerName || 'بدون نام'}</span>
-                          <span className="text-[9px] text-slate-400 font-mono">ID: {parcel.id.slice(0, 8)}</span>
+                {parcels.filter(p => p.ownerName?.toLowerCase().includes(searchQuery.toLowerCase())).length > 0 ? (
+                  parcels
+                    .filter(p => p.ownerName?.toLowerCase().includes(searchQuery.toLowerCase()))
+                    .map(parcel => (
+                      <button
+                        key={parcel.id}
+                        onClick={() => {
+                          if (isPrintMode) {
+                            setSelectedParcelForCertificate(parcel);
+                          } else {
+                            setHighlightedParcelId(parcel.id);
+                            setCenterTrigger(prev => prev + 1);
+                            setIsSearchActive(false);
+                            setSearchQuery('');
+                          }
+                        }}
+                        className={cn(
+                          "w-full px-5 py-4 text-right flex items-center justify-between border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors",
+                          highlightedParcelId === parcel.id ? "bg-emerald-50 text-emerald-700" : "text-slate-700"
+                        )}
+                      >
+                        <div className="flex flex-col items-start text-right w-full">
+                          <span className="font-bold text-sm">{parcel.ownerName}</span>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[10px] text-slate-400">مساحت: {(parcel.area || 0).toFixed(1)} متر مربع</span>
+                            <span className="text-[10px] text-indigo-400 font-bold bg-indigo-50 px-1.5 py-0.5 rounded-md">نسل {parcel.generation || 1}</span>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-[10px] text-slate-400">مساحت: {parcel.area.toFixed(1)} متر مربع</span>
-                          <span className="text-[10px] text-indigo-400 font-bold bg-indigo-50 px-1.5 py-0.5 rounded-md">نسل {parcel.generation || 1}</span>
-                        </div>
-                      </div>
-                      {isPrintMode ? <Printer className="w-4 h-4 text-slate-400" /> : <Navigation className="w-4 h-4 text-slate-300" />}
-                    </button>
-                  ))
+                        {isPrintMode ? <Printer className="w-4 h-4 text-slate-400" /> : <Navigation className="w-4 h-4 text-slate-300" />}
+                      </button>
+                    ))
                 ) : (
                   <div className="p-8 text-center text-slate-400 text-sm">
                     مالکی با این نام پیدا نشد
@@ -1261,7 +1276,7 @@ export default function App() {
                         <div className="flex justify-between items-center mb-3">
                           <span className="font-bold text-slate-900">{parcel.name}</span>
                           <span className="text-xs font-mono text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg">
-                            {parcel.area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })} m²
+                            {(parcel.area || 0).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} m²
                           </span>
                         </div>
                         
@@ -1272,7 +1287,7 @@ export default function App() {
                                 <span className="text-slate-700">{div.partnerId}</span>
                                 <div className="flex items-center gap-2">
                                   <span className="font-bold text-blue-600">{div.percentage}%</span>
-                                  <span className="text-slate-400">({(parcel.area * div.percentage / 100).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} m²)</span>
+                                  <span className="text-slate-400">({((parcel.area || 0) * div.percentage / 100).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} m²)</span>
                                 </div>
                               </div>
                             ))}

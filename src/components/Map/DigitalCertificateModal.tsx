@@ -59,10 +59,10 @@ const DigitalCertificateModal: React.FC<DigitalCertificateModalProps> = ({
     return parcel.pointIds.map(id => allPoints.find(p => p.id === id)!).filter(Boolean);
   }, [parcel, allPoints]);
 
-  const jarib = (parcel.area / 2000).toFixed(4);
+  const jarib = ((parcel.area || 0) / 2000).toFixed(4);
 
   const areaFontSize = useMemo(() => {
-    const len = parcel.area.toFixed(4).length;
+    const len = (parcel.area || 0).toFixed(4).length;
     if (len > 12) return 'text-sm';
     if (len > 10) return 'text-base';
     return 'text-xl';
@@ -250,7 +250,7 @@ const DigitalCertificateModal: React.FC<DigitalCertificateModalProps> = ({
                   <Scale className="w-4 h-4 text-indigo-600" />
                   <span className="text-[9px] font-black text-slate-400 uppercase">مساحت</span>
                 </div>
-                <span className={`${areaFontSize} font-black text-slate-900 truncate`}>{parcel.area.toFixed(4)} m²</span>
+                <span className={`${areaFontSize} font-black text-slate-900 truncate`}>{(parcel.area || 0).toFixed(4)} m²</span>
                 <span className="text-[10px] font-bold text-emerald-600">{jarib} جریب</span>
               </div>
               
