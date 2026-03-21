@@ -34,6 +34,13 @@ const DigitalCertificateModal: React.FC<DigitalCertificateModalProps> = ({
 
   const jarib = (parcel.area / 2000).toFixed(4);
 
+  const areaFontSize = useMemo(() => {
+    const len = parcel.area.toFixed(4).length;
+    if (len > 12) return 'text-sm';
+    if (len > 10) return 'text-base';
+    return 'text-xl';
+  }, [parcel.area]);
+
   const perimeter = useMemo(() => {
     if (parcelPoints.length < 2) return 0;
     let total = 0;
@@ -78,6 +85,32 @@ const DigitalCertificateModal: React.FC<DigitalCertificateModalProps> = ({
       };
     });
   }, [parcel, parcelPoints, allParcels]);
+
+  // Adaptive Table Logic
+  const tableConfig = useMemo(() => {
+    const count = boundaryMatrix.length;
+    let padding = 'py-4';
+    let fontSize = 'text-sm';
+    let monoSize = 'text-xs';
+    let isTwoColumn = false;
+
+    if (count > 40) {
+      padding = 'py-1';
+      fontSize = 'text-[9px]';
+      monoSize = 'text-[8px]';
+      isTwoColumn = true;
+    } else if (count > 25) {
+      padding = 'py-2';
+      fontSize = 'text-xs';
+      monoSize = 'text-[10px]';
+      isTwoColumn = count > 30;
+    } else if (count > 15) {
+      padding = 'py-3';
+      fontSize = 'text-xs';
+    }
+
+    return { padding, fontSize, monoSize, isTwoColumn };
+  }, [boundaryMatrix]);
 
   const digitalFingerprint = useMemo(() => {
     const dataString = `${parcel.id}-${parcel.area}-${parcel.pointIds.join('')}`;
@@ -139,174 +172,181 @@ const DigitalCertificateModal: React.FC<DigitalCertificateModalProps> = ({
             className="bg-white w-full mx-auto shadow-sm border border-slate-200 rounded-[32px] overflow-hidden p-12 print:shadow-none print:border-none print:p-0"
             dir="rtl"
           >
-            {/* Engineering Certificate Header */}
-            <div className="flex justify-between items-start mb-10 border-b-8 border-slate-900 pb-8">
-              <div className="flex items-center gap-6">
-                <div className="w-20 h-20 bg-slate-900 rounded-3xl flex items-center justify-center shadow-2xl">
-                  <ShieldCheck className="w-12 h-12 text-emerald-400" />
+            {/* Engineering Certificate Header - Optimized Space */}
+            <div className="flex justify-between items-start mb-6 border-b-4 border-slate-900 pb-4">
+              <div className="flex items-center gap-4">
+                <div className="w-16 h-16 bg-slate-900 rounded-2xl flex items-center justify-center shadow-xl">
+                  <ShieldCheck className="w-10 h-10 text-emerald-400" />
                 </div>
                 <div>
-                  <h1 className="text-5xl font-black text-slate-900 mb-2 tracking-tighter">شناسنامه فنی و کاداستر</h1>
-                  <p className="text-slate-500 font-bold text-xl flex items-center gap-2">
-                    <Binary className="w-5 h-5" />
+                  <h1 className="text-4xl font-black text-slate-900 mb-1 tracking-tighter">شناسنامه فنی و کاداستر</h1>
+                  <p className="text-slate-500 font-bold text-base flex items-center gap-2">
+                    <Binary className="w-4 h-4" />
                     ماتریس مختصات و مهندسی اراضی دیجیتال
                   </p>
                 </div>
               </div>
               <div className="text-left">
-                <div className="bg-slate-900 text-white px-8 py-4 rounded-3xl font-black text-2xl mb-2 flex items-center gap-3">
-                  <Hash className="w-6 h-6 text-emerald-400" />
+                <div className="bg-slate-900 text-white px-6 py-3 rounded-2xl font-black text-xl mb-1 flex items-center gap-2">
+                  <Hash className="w-5 h-5 text-emerald-400" />
                   {parcel.id.slice(0, 10).toUpperCase()}
                 </div>
-                <p className="text-slate-400 font-bold text-sm">نسخه سیستمی: ۳.۰.۴ (WGS84)</p>
+                <p className="text-slate-400 font-bold text-[10px]">نسخه سیستمی: ۳.۰.۴ (WGS84)</p>
               </div>
             </div>
 
-            {/* Identity & Geometric Summary */}
-            <div className="grid grid-cols-3 gap-6 mb-10">
-              <div className="col-span-1 bg-slate-900 text-white p-8 rounded-[40px] shadow-2xl relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-400/10 rounded-full -mr-16 -mt-16" />
-                <User className="w-8 h-8 text-emerald-400 mb-4" />
-                <span className="text-xs font-black text-slate-400 block uppercase mb-1">هویت مالک قانونی</span>
-                <span className="text-2xl font-black">{parcel.ownerName || 'نامشخص'}</span>
+            {/* Identity & Geometric Summary - Uniform Grid */}
+            <div className="grid grid-cols-4 gap-4 mb-6">
+              <div className="bg-slate-900 text-white p-5 rounded-[24px] shadow-lg relative overflow-hidden flex flex-col justify-center">
+                <div className="absolute top-0 right-0 w-20 h-20 bg-emerald-400/10 rounded-full -mr-10 -mt-10" />
+                <div className="flex items-center gap-2 mb-2">
+                  <User className="w-4 h-4 text-emerald-400" />
+                  <span className="text-[9px] font-black text-slate-400 uppercase">هویت مالک</span>
+                </div>
+                <span className="text-base font-black truncate">{parcel.ownerName || 'نامشخص'}</span>
               </div>
               
-              <div className="col-span-2 grid grid-cols-3 gap-4">
-                <div className="bg-slate-50 p-6 rounded-[32px] border-2 border-slate-200 flex flex-col justify-center">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Scale className="w-4 h-4 text-indigo-600" />
-                    <span className="text-[10px] font-black text-slate-400 uppercase">مساحت محاسباتی</span>
-                  </div>
-                  <span className="text-xl font-black text-slate-900">{parcel.area.toFixed(4)} m²</span>
-                  <span className="text-xs font-bold text-emerald-600">{jarib} جریب</span>
+              <div className="bg-slate-50 p-5 rounded-[24px] border-2 border-slate-200 flex flex-col justify-center">
+                <div className="flex items-center gap-2 mb-2">
+                  <Scale className="w-4 h-4 text-indigo-600" />
+                  <span className="text-[9px] font-black text-slate-400 uppercase">مساحت</span>
                 </div>
-                
-                <div className="bg-slate-50 p-6 rounded-[32px] border-2 border-slate-200 flex flex-col justify-center">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Ruler className="w-4 h-4 text-rose-600" />
-                    <span className="text-[10px] font-black text-slate-400 uppercase">محیط کل مرز</span>
-                  </div>
-                  <span className="text-xl font-black text-slate-900">{perimeter.toFixed(3)} m</span>
+                <span className={`${areaFontSize} font-black text-slate-900 truncate`}>{parcel.area.toFixed(4)} m²</span>
+                <span className="text-[10px] font-bold text-emerald-600">{jarib} جریب</span>
+              </div>
+              
+              <div className="bg-slate-50 p-5 rounded-[24px] border-2 border-slate-200 flex flex-col justify-center">
+                <div className="flex items-center gap-2 mb-2">
+                  <Ruler className="w-4 h-4 text-rose-600" />
+                  <span className="text-[9px] font-black text-slate-400 uppercase">محیط کل</span>
                 </div>
+                <span className="text-lg font-black text-slate-900">{perimeter.toFixed(3)} m</span>
+              </div>
 
-                <div className="bg-slate-50 p-6 rounded-[32px] border-2 border-slate-200 flex flex-col justify-center">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Compass className="w-4 h-4 text-amber-600" />
-                    <span className="text-[10px] font-black text-slate-400 uppercase">نقطه ثقل (Centroid)</span>
-                  </div>
-                  <div className="flex flex-col text-[10px] font-mono font-bold text-slate-700">
-                    <span>LAT: {center.lat.toFixed(7)}</span>
-                    <span>LNG: {center.lng.toFixed(7)}</span>
-                  </div>
+              <div className="bg-slate-50 p-5 rounded-[24px] border-2 border-slate-200 flex flex-col justify-center">
+                <div className="flex items-center gap-2 mb-2">
+                  <Compass className="w-4 h-4 text-amber-600" />
+                  <span className="text-[9px] font-black text-slate-400 uppercase">نقطه ثقل</span>
+                </div>
+                <div className="flex flex-col text-[9px] font-mono font-bold text-slate-700">
+                  <span>LAT: {center.lat.toFixed(6)}</span>
+                  <span>LNG: {center.lng.toFixed(6)}</span>
                 </div>
               </div>
             </div>
 
-            {/* The Boundary Matrix Table */}
-            <div className="mb-10">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-xl font-black text-slate-900 flex items-center gap-3">
-                  <div className="w-3 h-3 bg-emerald-600 rounded-full" />
-                  ماتریس مختصات و مجاورین (Boundary Matrix)
+            {/* The Boundary Matrix Table - Adaptive */}
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                  <div className="w-2 h-2 bg-emerald-600 rounded-full" />
+                  ماتریس مختصات و مجاورین
                 </h3>
-                <div className="bg-emerald-50 text-emerald-700 px-4 py-2 rounded-xl text-xs font-black border border-emerald-100">
+                <div className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-lg text-[10px] font-black border border-emerald-100">
                   دقت میلی‌متری (RTK-GNSS)
                 </div>
               </div>
               
-              <div className="overflow-hidden border-2 border-slate-900 rounded-[32px] shadow-xl">
-                <table className="w-full text-right border-collapse">
-                  <thead>
-                    <tr className="bg-slate-900 text-white">
-                      <th className="px-6 py-5 text-xs font-black uppercase tracking-widest border-l border-white/10">شناسه</th>
-                      <th className="px-6 py-5 text-xs font-black uppercase tracking-widest border-l border-white/10">عرض جغرافیایی (Lat)</th>
-                      <th className="px-6 py-5 text-xs font-black uppercase tracking-widest border-l border-white/10">طول جغرافیایی (Lng)</th>
-                      <th className="px-6 py-5 text-xs font-black uppercase tracking-widest border-l border-white/10">طول ضلع (m)</th>
-                      <th className="px-6 py-5 text-xs font-black uppercase tracking-widest border-l border-white/10">آزیموت (°)</th>
-                      <th className="px-6 py-5 text-xs font-black uppercase tracking-widest">وضعیت مجاورت</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-sm font-bold">
-                    {boundaryMatrix.map((row, idx) => (
-                      <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
-                        <td className="px-6 py-4 border-l border-slate-200 font-black text-indigo-600">{row.id}</td>
-                        <td className="px-6 py-4 border-l border-slate-200 font-mono text-xs">{row.lat}</td>
-                        <td className="px-6 py-4 border-l border-slate-200 font-mono text-xs">{row.lng}</td>
-                        <td className="px-6 py-4 border-l border-slate-200 text-emerald-700">{row.length}</td>
-                        <td className="px-6 py-4 border-l border-slate-200 text-amber-700">{row.azimuth}</td>
-                        <td className="px-6 py-4 text-slate-500 text-xs">{row.neighbor}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className={`grid ${tableConfig.isTwoColumn ? 'grid-cols-2 gap-4' : 'grid-cols-1'}`}>
+                {[...Array(tableConfig.isTwoColumn ? 2 : 1)].map((_, colIdx) => {
+                  const items = tableConfig.isTwoColumn 
+                    ? (colIdx === 0 ? boundaryMatrix.slice(0, Math.ceil(boundaryMatrix.length / 2)) : boundaryMatrix.slice(Math.ceil(boundaryMatrix.length / 2)))
+                    : boundaryMatrix;
+                  
+                  if (items.length === 0) return null;
+
+                  return (
+                    <div key={colIdx} className="overflow-hidden border-2 border-slate-900 rounded-[20px] shadow-md">
+                      <table className="w-full text-right border-collapse">
+                        <thead>
+                          <tr className="bg-slate-900 text-white">
+                            <th className="px-3 py-3 text-[9px] font-black uppercase border-l border-white/10">V</th>
+                            <th className="px-3 py-3 text-[9px] font-black uppercase border-l border-white/10">Lat</th>
+                            <th className="px-3 py-3 text-[9px] font-black uppercase border-l border-white/10">Lng</th>
+                            <th className="px-3 py-3 text-[9px] font-black uppercase border-l border-white/10">ضلع</th>
+                            <th className="px-3 py-3 text-[9px] font-black uppercase border-l border-white/10">آزیموت</th>
+                            <th className="px-3 py-3 text-[9px] font-black uppercase">مجاور</th>
+                          </tr>
+                        </thead>
+                        <tbody className={`${tableConfig.fontSize} font-bold`}>
+                          {items.map((row, idx) => (
+                            <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                              <td className={`px-3 ${tableConfig.padding} border-l border-slate-200 font-black text-indigo-600`}>{row.id}</td>
+                              <td className={`px-3 ${tableConfig.padding} border-l border-slate-200 font-mono ${tableConfig.monoSize}`}>{row.lat}</td>
+                              <td className={`px-3 ${tableConfig.padding} border-l border-slate-200 font-mono ${tableConfig.monoSize}`}>{row.lng}</td>
+                              <td className={`px-3 ${tableConfig.padding} border-l border-slate-200 text-emerald-700`}>{row.length}</td>
+                              <td className={`px-3 ${tableConfig.padding} border-l border-slate-200 text-amber-700`}>{row.azimuth}</td>
+                              <td className={`px-3 ${tableConfig.padding} text-slate-500 text-[9px] truncate max-w-[80px]`}>{row.neighbor}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Construction & Technical Details */}
-            <div className="grid grid-cols-2 gap-8 mb-10">
-              <div className="bg-slate-900 text-white p-8 rounded-[40px] flex items-center justify-between">
+            {/* Construction & Technical Details - Adaptive Footer */}
+            <div className={`grid ${boundaryMatrix.length > 25 ? 'grid-cols-3' : 'grid-cols-2'} gap-4 mb-6`}>
+              <div className={`${boundaryMatrix.length > 25 ? 'col-span-2' : 'col-span-1'} bg-slate-900 text-white p-6 rounded-[32px] flex items-center justify-between`}>
                 <div>
-                  <h4 className="text-xs font-black text-emerald-400 uppercase mb-4 flex items-center gap-2">
-                    <Fingerprint className="w-4 h-4" />
-                    اثر انگشت دیجیتال (Hash)
+                  <h4 className="text-[9px] font-black text-emerald-400 uppercase mb-2 flex items-center gap-2">
+                    <Fingerprint className="w-3 h-3" />
+                    اثر انگشت دیجیتال
                   </h4>
-                  <p className="font-mono text-lg tracking-[0.2em]">{digitalFingerprint}</p>
-                  <p className="text-[10px] text-slate-500 mt-2">تأییدیه عدم دستکاری در داده‌های کاداستر</p>
+                  <p className="font-mono text-base tracking-[0.1em]">{digitalFingerprint}</p>
                 </div>
-                <div className="w-20 h-20 bg-white/5 rounded-2xl border border-white/10 flex items-center justify-center">
-                  <div className="grid grid-cols-4 gap-1">
+                <div className="w-12 h-12 bg-white/5 rounded-xl border border-white/10 flex items-center justify-center">
+                  <div className="grid grid-cols-4 gap-0.5">
                     {[...Array(16)].map((_, i) => (
-                      <div key={i} className={`w-2 h-2 rounded-sm ${Math.random() > 0.5 ? 'bg-emerald-400' : 'bg-white/10'}`} />
+                      <div key={i} className={`w-1.5 h-1.5 rounded-sm ${Math.random() > 0.5 ? 'bg-emerald-400' : 'bg-white/10'}`} />
                     ))}
                   </div>
                 </div>
               </div>
 
-              <div className="bg-slate-50 p-8 rounded-[40px] border-2 border-slate-200">
-                <h4 className="text-xs font-black text-slate-400 uppercase mb-4 flex items-center gap-2">
-                  <Info className="w-4 h-4 text-indigo-600" />
-                  جزئیات ساختاری و تفکیک
+              <div className="bg-slate-50 p-6 rounded-[32px] border-2 border-slate-200">
+                <h4 className="text-[9px] font-black text-slate-400 uppercase mb-2 flex items-center gap-2">
+                  <Info className="w-3 h-3 text-indigo-600" />
+                  جزئیات ساختاری
                 </h4>
-                <div className="space-y-3">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-500">شناسه قطعه مادر:</span>
+                <div className="space-y-1 text-[10px]">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">قطعه مادر:</span>
                     <span className="font-black text-slate-900">PARENT-{parcel.id.slice(0, 4).toUpperCase()}</span>
                   </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-500">نسل تفکیک اراضی:</span>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">نسل تفکیک:</span>
                     <span className="font-black text-indigo-600">نسل {parcel.generation || 1}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-500">الگوریتم محاسباتی:</span>
-                    <span className="font-black text-slate-900">WGS84 / EGM96</span>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Final Security Footer */}
-            <div className="flex justify-between items-center bg-slate-900 p-10 rounded-[48px] text-white">
-              <div className="flex gap-12">
+            {/* Final Security Footer - Compact */}
+            <div className="flex justify-between items-center bg-slate-900 p-6 rounded-[40px] text-white">
+              <div className="flex gap-8">
                 <div className="text-right">
-                  <p className="text-[10px] font-black text-emerald-400 mb-4 uppercase tracking-widest">تأییدیه مهندسی کاداستر</p>
-                  <div className="flex items-center gap-4">
-                    <div className="w-16 h-16 rounded-full border-4 border-emerald-400/20 flex items-center justify-center">
-                      <CheckCircle2 className="w-8 h-8 text-emerald-400" />
+                  <p className="text-[8px] font-black text-emerald-400 mb-2 uppercase tracking-widest">تأییدیه مهندسی</p>
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full border-2 border-emerald-400/20 flex items-center justify-center">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-400" />
                     </div>
                     <div className="text-right">
-                      <p className="text-sm font-black">واحد کنترل کیفیت داده</p>
-                      <p className="text-[10px] text-slate-500">تأیید شده سیستمی</p>
+                      <p className="text-[10px] font-black">واحد کنترل کیفیت</p>
+                      <p className="text-[8px] text-slate-500">تأیید شده سیستمی</p>
                     </div>
                   </div>
                 </div>
               </div>
               <div className="text-left flex flex-col items-end">
-                <div className="w-32 h-32 bg-white p-3 rounded-3xl mb-4 shadow-2xl">
-                  <div className="w-full h-full bg-slate-100 rounded-xl flex items-center justify-center border-2 border-dashed border-slate-300">
-                    <span className="text-[10px] text-slate-400 font-black text-center">QR AUTH<br/>VALIDATED</span>
+                <div className="w-16 h-16 bg-white p-2 rounded-2xl mb-2">
+                  <div className="w-full h-full bg-slate-100 rounded-lg flex items-center justify-center border border-dashed border-slate-300">
+                    <span className="text-[7px] text-slate-400 font-black text-center">QR AUTH</span>
                   </div>
                 </div>
-                <p className="text-[10px] font-black text-slate-500">این سند فاقد نقشه گرافیکی بوده و بر اساس مختصات مطلق ریاضی صادر شده است.</p>
+                <p className="text-[8px] font-black text-slate-500">صدور بر اساس مختصات مطلق ریاضی (WGS84)</p>
               </div>
             </div>
           </div>
@@ -332,6 +372,10 @@ const DigitalCertificateModal: React.FC<DigitalCertificateModalProps> = ({
 
       <style>{`
         @media print {
+          @page {
+            size: A4;
+            margin: 0;
+          }
           body * {
             visibility: hidden;
           }
@@ -339,13 +383,15 @@ const DigitalCertificateModal: React.FC<DigitalCertificateModalProps> = ({
             visibility: visible;
           }
           #printable-certificate {
-            position: absolute;
+            position: fixed;
             left: 0;
             top: 0;
-            width: 100%;
-            padding: 0;
+            width: 210mm;
+            height: 297mm;
+            padding: 10mm;
             margin: 0;
             background: white;
+            overflow: hidden;
           }
           .coord-tooltip, .neighbor-tooltip, .neighbor-label, .target-label, .coord-label-pro {
             background: transparent !important;
@@ -355,6 +401,7 @@ const DigitalCertificateModal: React.FC<DigitalCertificateModalProps> = ({
         }
         table {
           page-break-inside: auto;
+          table-layout: fixed;
         }
         tr {
           page-break-inside: avoid;
