@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   MapPin, 
@@ -38,10 +38,7 @@ import {
   Database,
   Zap,
   RotateCcw,
-  Printer,
-  Bluetooth,
-  Cpu,
-  Wifi
+  Printer
 } from 'lucide-react';
 import * as turf from '@turf/turf';
 import MapView from './components/Map/MapView';
@@ -50,20 +47,15 @@ import BackupModal from './components/Backup/BackupModal';
 import ConvertModal from './components/Convert/ConvertModal';
 import DigitalCertificateModal from './components/Map/DigitalCertificateModal';
 import { RotationModal } from './components/Map/RotationModal';
-import GNSSSettings from './components/GNSS/GNSSSettings';
-import { Point, Connection, AppMode, Parcel, Partner, Division, GNSSConfig, GNSSStatus } from './types';
+import { Point, Connection, AppMode, Parcel, Partner, Division } from './types';
 import { cn } from './utils';
 import { geminiService } from './services/gemini';
-import { GNSSBluetoothManager, parseGPGGA } from './services/gnssService';
 
 export default function App() {
   const [points, setPoints] = useState<Point[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [mode, setMode] = useState<AppMode>('VIEW');
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number; accuracy: number }>();
-  const [rawLocation, setRawLocation] = useState<{ lat: number; lng: number; accuracy: number }>();
-  const locationBuffer = useRef<{ lat: number; lng: number }[]>([]);
-  const MAX_BUFFER_SIZE = 5; // Average over last 5 points for smoothing
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
   const [trackingTargetId, setTrackingTargetId] = useState<string | null>(null);
   const [showRecorder, setShowRecorder] = useState(false);
@@ -110,23 +102,6 @@ export default function App() {
   const [showConvertModal, setShowConvertModal] = useState(false);
   const [selectedParcelForConversion, setSelectedParcelForConversion] = useState<Parcel | null>(null);
   const [selectedDivisionForConversion, setSelectedDivisionForConversion] = useState<Division | null>(null);
-
-  const [gnssConfig, setGnssConfig] = useState<GNSSConfig>({
-    source: 'INTERNAL'
-  });
-  const [gnssStatus, setGnssStatus] = useState<GNSSStatus>({
-    connected: false,
-    fixType: 'NONE',
-    satellites: 0,
-    hdop: 0,
-    lat: 0,
-    lng: 0,
-    altitude: 0,
-    accuracy: 0,
-    timestamp: 0
-  });
-
-  const gnssManager = useMemo(() => new GNSSBluetoothManager(), []);
 
   const APP_VERSION = '1.1.0';
 
@@ -179,51 +154,15 @@ export default function App() {
       localStorage.setItem('marzban_connections', JSON.stringify(parsedConnections));
       localStorage.setItem('marzban_parcels', JSON.stringify(parsedParcels));
     }
-
-    const savedGnssConfig = localStorage.getItem('marzban_gnss_config');
-    if (savedGnssConfig) {
-      setGnssConfig(JSON.parse(savedGnssConfig));
-    }
   }, []);
 
   const [hasZoomedForLocation, setHasZoomedForLocation] = useState(false);
 
-  // GNSS Bluetooth Data Stream
-  useEffect(() => {
-    if (gnssConfig.source === 'EXTERNAL' && gnssStatus.connected) {
-      gnssManager.onData((sentence) => {
-        const parsed = parseGPGGA(sentence);
-        if (parsed) {
-          setGnssStatus(prev => ({
-            ...prev,
-            ...parsed,
-            connected: true
-          }));
-        }
-      });
-    }
-  }, [gnssConfig.source, gnssStatus.connected, gnssManager]);
-
   // Live Location Tracking - Only active when showUserLocation is true
   useEffect(() => {
-    if (!showUserLocation) {
+    if (!navigator.geolocation || !showUserLocation) {
       setUserLocation(undefined);
       setHasZoomedForLocation(false);
-      return;
-    }
-
-    if (gnssConfig.source === 'EXTERNAL' && gnssStatus.connected) {
-      // Use external GNSS data
-      setRawLocation({
-        lat: gnssStatus.lat,
-        lng: gnssStatus.lng,
-        accuracy: gnssStatus.accuracy
-      });
-      return;
-    }
-
-    if (!navigator.geolocation) {
-      setRawLocation(undefined);
       return;
     }
 
@@ -234,40 +173,14 @@ export default function App() {
           lng: pos.coords.longitude,
           accuracy: pos.coords.accuracy
         };
-        setRawLocation(loc);
+        setUserLocation(loc);
       },
       (err) => console.error(err),
       { enableHighAccuracy: true }
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [showUserLocation, gnssConfig.source, gnssStatus.connected, gnssStatus.lat, gnssStatus.lng, gnssStatus.accuracy]);
-
-  // Apply smoothing and offset to raw location
-  useEffect(() => {
-    if (!rawLocation) {
-      setUserLocation(undefined);
-      return;
-    }
-
-    // 1. Smoothing (Moving Average)
-    locationBuffer.current.push({ lat: rawLocation.lat, lng: rawLocation.lng });
-    if (locationBuffer.current.length > MAX_BUFFER_SIZE) {
-      locationBuffer.current.shift();
-    }
-
-    const avgLat = locationBuffer.current.reduce((sum, p) => sum + p.lat, 0) / locationBuffer.current.length;
-    const avgLng = locationBuffer.current.reduce((sum, p) => sum + p.lng, 0) / locationBuffer.current.length;
-
-    // 2. Apply Manual Offset
-    const offset = gnssConfig.locationOffset || { lat: 0, lng: 0 };
-    
-    setUserLocation({
-      lat: avgLat + offset.lat,
-      lng: avgLng + offset.lng,
-      accuracy: rawLocation.accuracy
-    });
-  }, [rawLocation, gnssConfig.locationOffset]);
+  }, [showUserLocation]);
 
   // One-time zoom when turning on location and first fix is received
   useEffect(() => {
@@ -703,29 +616,6 @@ export default function App() {
     }
   };
 
-  const handleGnssConnect = async () => {
-    try {
-      const deviceName = await gnssManager.connect();
-      setGnssConfig(prev => {
-        const newConfig = { ...prev, bluetoothDeviceName: deviceName };
-        localStorage.setItem('marzban_gnss_config', JSON.stringify(newConfig));
-        return newConfig;
-      });
-      setGnssStatus(prev => ({ ...prev, connected: true }));
-    } catch (error) {
-      alert("خطا در اتصال به دستگاه GNSS. اطمینان حاصل کنید که بلوتوث روشن است.");
-    }
-  };
-
-  const handleSaveGnssConfig = (config: GNSSConfig) => {
-    setGnssConfig(config);
-    localStorage.setItem('marzban_gnss_config', JSON.stringify(config));
-    if (config.source === 'INTERNAL') {
-      gnssManager.disconnect();
-      setGnssStatus(prev => ({ ...prev, connected: false }));
-    }
-  };
-
   const handleRestore = (data: { points: Point[]; connections: Connection[]; parcels: Parcel[] }) => {
     setPoints(data.points);
     setConnections(data.connections);
@@ -782,31 +672,6 @@ export default function App() {
   const startUpdate = () => {
     setIsUpdating(true);
     setShowRecorder(true);
-  };
-
-  const calibrateLocation = (targetPoint: Point) => {
-    if (!rawLocation) {
-      alert("ابتدا مکان خود را روشن کنید.");
-      return;
-    }
-    
-    // Calculate the difference between where we ARE and where the target point IS
-    const offset = {
-      lat: targetPoint.lat - rawLocation.lat,
-      lng: targetPoint.lng - rawLocation.lng
-    };
-    
-    const newConfig = { ...gnssConfig, locationOffset: offset };
-    setGnssConfig(newConfig);
-    localStorage.setItem('marzban_gnss_config', JSON.stringify(newConfig));
-    alert("کالیبراسیون با موفقیت انجام شد. مکان شما اکنون با نقطه هدف منطبق است.");
-  };
-
-  const resetCalibration = () => {
-    const newConfig = { ...gnssConfig, locationOffset: { lat: 0, lng: 0 } };
-    setGnssConfig(newConfig);
-    localStorage.setItem('marzban_gnss_config', JSON.stringify(newConfig));
-    alert("کالیبراسیون بازنشانی شد.");
   };
 
   useEffect(() => {
@@ -895,17 +760,6 @@ export default function App() {
            >
              {isSearchActive ? <SearchX className="w-5 h-5" /> : <Search className="w-5 h-5" />}
            </button>
-
-           <button 
-              onClick={() => setMode('GNSS_SETTINGS')}
-              className={cn(
-                "p-2 rounded-full transition-colors",
-                mode === 'GNSS_SETTINGS' ? "bg-emerald-100 text-emerald-600" : "text-slate-500 hover:bg-slate-100"
-              )}
-              title="تنظیمات GNSS"
-            >
-              <Cpu className="w-5 h-5" />
-            </button>
 
            <button 
              onClick={() => setShowBackupModal(true)}
@@ -1203,28 +1057,20 @@ export default function App() {
               </div>
               
               {isAdmin && (
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-3">
                   <button 
                     onClick={() => deletePoint(selectedPoint.id)}
-                    className="flex flex-col items-center justify-center gap-1 py-3 bg-rose-50 text-rose-600 rounded-2xl font-bold hover:bg-rose-100 transition-colors"
+                    className="flex items-center justify-center gap-2 py-4 bg-rose-50 text-rose-600 rounded-2xl font-bold hover:bg-rose-100 transition-colors"
                   >
-                    <Trash2 className="w-4 h-4" />
-                    <span className="text-[10px]">حذف</span>
+                    <Trash2 className="w-5 h-5" />
+                    حذف
                   </button>
                   <button 
                     onClick={startUpdate}
-                    className="flex flex-col items-center justify-center gap-1 py-3 bg-amber-50 text-amber-600 rounded-2xl font-bold hover:bg-amber-100 transition-colors"
+                    className="flex items-center justify-center gap-2 py-4 bg-amber-50 text-amber-600 rounded-2xl font-bold hover:bg-amber-100 transition-colors"
                   >
-                    <RefreshCw className="w-4 h-4" />
-                    <span className="text-[10px]">بروزرسانی</span>
-                  </button>
-                  <button 
-                    onClick={() => calibrateLocation(selectedPoint)}
-                    className="flex flex-col items-center justify-center gap-1 py-3 bg-blue-50 text-blue-600 rounded-2xl font-bold hover:bg-blue-100 transition-colors"
-                    title="تنظیم مکان من بر روی این نقطه"
-                  >
-                    <Target className="w-4 h-4" />
-                    <span className="text-[10px]">کالیبره</span>
+                    <RefreshCw className="w-5 h-5" />
+                    بروزرسانی
                   </button>
                 </div>
               )}
@@ -1241,16 +1087,6 @@ export default function App() {
             />
           )}
         </AnimatePresence>
-        {mode === 'GNSS_SETTINGS' && (
-          <GNSSSettings
-            config={gnssConfig}
-            status={gnssStatus}
-            onSave={handleSaveGnssConfig}
-            onConnect={handleGnssConnect}
-            onResetCalibration={resetCalibration}
-            onClose={() => setMode('VIEW')}
-          />
-        )}
       </main>
 
       {/* Mode Indicator */}
