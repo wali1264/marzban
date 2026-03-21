@@ -36,8 +36,9 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
   
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const watchIdRef = useRef<number | null>(null);
-  const kalmanLat = useRef(new KalmanFilter({ R: 0.01, Q: 3 }));
-  const kalmanLng = useRef(new KalmanFilter({ R: 0.01, Q: 3 }));
+  const kalmanLat = useRef(new KalmanFilter({ R: 0.1, Q: 1 })); // Initial conservative values
+  const kalmanLng = useRef(new KalmanFilter({ R: 0.1, Q: 1 }));
+  const lastValidReading = useRef<{ lat: number, lng: number } | null>(null);
   const motionRef = useRef<{ x: number, y: number, z: number }[]>([]);
 
   const startObservation = useCallback(() => {
@@ -54,19 +55,52 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
         return;
       }
 
-      // Reset Kalman Filters
-      kalmanLat.current = new KalmanFilter({ R: 0.01, Q: 3 });
-      kalmanLng.current = new KalmanFilter({ R: 0.01, Q: 3 });
+      // Reset Kalman Filters with Dynamic Tuning for Stationary Start
+      // R (Measurement Noise): High R means we trust the model more than the sensor (good for noisy GPS)
+      // Q (Process Noise): Low Q means we expect the system to be stable (good for stationary)
+      kalmanLat.current = new KalmanFilter({ R: 0.5, Q: 0.01 });
+      kalmanLng.current = new KalmanFilter({ R: 0.5, Q: 0.01 });
+      lastValidReading.current = null;
 
       // Start watching position
       watchIdRef.current = navigator.geolocation.watchPosition(
         (position) => {
-          // Filter out very poor readings (> 20m)
-          if (position.coords.accuracy > 20) return;
+          // 1. HARD FILTER: Reject low accuracy or network-based fallbacks
+          if (position.coords.accuracy > 15) return;
 
-          // Apply Kalman Filter
-          const filteredLat = kalmanLat.current.filter(position.coords.latitude);
-          const filteredLng = kalmanLng.current.filter(position.coords.longitude);
+          // 2. ZERO-VELOCITY CONSTRAINT (ZVC)
+          // If the IMU (accelerometer) says we are NOT moving, but GPS says we are,
+          // we treat the GPS change as Multipath Noise.
+          
+          let targetLat = position.coords.latitude;
+          let targetLng = position.coords.longitude;
+
+          if (!isMoving && lastValidReading.current) {
+            // Calculate distance from last reading
+            const dist = Math.sqrt(
+              Math.pow(targetLat - lastValidReading.current.lat, 2) + 
+              Math.pow(targetLng - lastValidReading.current.lng, 2)
+            );
+            
+            // If jump is small (< 0.0001 degrees ~ 10m) and we are stationary, 
+            // it's almost certainly GNSS Wander. We damp it heavily.
+            if (dist < 0.0001) {
+              // Increase R dynamically: Trust the sensor even LESS because we know we are stationary
+              kalmanLat.current.R = 10.0; 
+              kalmanLng.current.R = 10.0;
+            } else {
+              // Large jump while stationary? Likely a massive Multipath error. Reject it.
+              return;
+            }
+          } else {
+            // We are moving: Trust the sensor more (Lower R)
+            kalmanLat.current.R = 0.1;
+            kalmanLng.current.R = 0.1;
+          }
+
+          // 3. Apply Kalman Filter
+          const filteredLat = kalmanLat.current.filter(targetLat);
+          const filteredLng = kalmanLng.current.filter(targetLng);
 
           const newReading = {
             lat: filteredLat,
@@ -74,6 +108,8 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
             accuracy: position.coords.accuracy,
             altitude: position.coords.altitude
           };
+          
+          lastValidReading.current = { lat: filteredLat, lng: filteredLng };
           setCurrentReading(newReading);
           setReadings(prev => [...prev, newReading]);
         },
@@ -99,9 +135,10 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
             return acc + Math.abs(val.x - prev.x) + Math.abs(val.y - prev.y) + Math.abs(val.z - prev.z);
           }, 0) / motionRef.current.length;
 
-          const stabilityVal = Math.max(0, Math.min(100, 100 - (variance * 20)));
+          // Expert Threshold: 0.2 is the noise floor for a high-end smartphone on a table
+          const stabilityVal = Math.max(0, Math.min(100, 100 - (variance * 50)));
           setStability(stabilityVal);
-          setIsMoving(variance > 0.5);
+          setIsMoving(variance > 0.25); // Strict threshold for "Stationary"
         }
       };
 
