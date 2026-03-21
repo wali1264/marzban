@@ -61,7 +61,6 @@ export default function App() {
   const [showRecorder, setShowRecorder] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [centerTrigger, setCenterTrigger] = useState(0);
-  const [parcelCenterTrigger, setParcelCenterTrigger] = useState(0);
   const [showUserLocation, setShowUserLocation] = useState(false);
 
   const [parcels, setParcels] = useState<Parcel[]>([]);
@@ -800,7 +799,6 @@ export default function App() {
           selectedPointId={selectedPointId}
           trackingTargetId={trackingTargetId}
           centerTrigger={centerTrigger}
-          parcelCenterTrigger={parcelCenterTrigger}
           parcels={parcels}
           generationFilter={generationFilter}
           highlightedParcelId={highlightedParcelId}
@@ -890,9 +888,9 @@ export default function App() {
                 exit={{ y: 20, opacity: 0 }}
                 className="bg-white/95 backdrop-blur-md border border-slate-200 rounded-3xl shadow-2xl w-full max-w-md overflow-hidden max-h-60 overflow-y-auto"
               >
-                {parcels.filter(p => (p.ownerName || '').toLowerCase().includes(searchQuery.toLowerCase())).length > 0 ? (
+                {parcels.filter(p => p.ownerName?.toLowerCase().includes(searchQuery.toLowerCase())).length > 0 ? (
                   parcels
-                    .filter(p => (p.ownerName || '').toLowerCase().includes(searchQuery.toLowerCase()))
+                    .filter(p => p.ownerName?.toLowerCase().includes(searchQuery.toLowerCase()))
                     .map(parcel => (
                       <button
                         key={parcel.id}
@@ -901,7 +899,7 @@ export default function App() {
                             setSelectedParcelForCertificate(parcel);
                           } else {
                             setHighlightedParcelId(parcel.id);
-                            setParcelCenterTrigger(prev => prev + 1);
+                            setCenterTrigger(prev => prev + 1);
                             setIsSearchActive(false);
                             setSearchQuery('');
                           }
