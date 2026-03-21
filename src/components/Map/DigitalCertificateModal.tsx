@@ -1,6 +1,6 @@
 import React, { useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Printer, MapPin, Scale, Layers, User } from 'lucide-react';
+import { X, Printer, MapPin, Scale, Layers, User, CheckCircle2 } from 'lucide-react';
 import { Parcel, Point } from '../../types';
 import { MapContainer, TileLayer, Polygon, Marker, Tooltip } from 'react-leaflet';
 import L from 'leaflet';
@@ -92,111 +92,151 @@ const DigitalCertificateModal: React.FC<DigitalCertificateModalProps> = ({
             className="bg-white w-full mx-auto shadow-sm border border-slate-200 rounded-[32px] overflow-hidden p-12 print:shadow-none print:border-none print:p-0"
             dir="rtl"
           >
-            {/* Certificate Header */}
-            <div className="text-center mb-12">
-              <h1 className="text-4xl font-black text-slate-900 mb-2">سند دیجیتال ملک</h1>
-              <div className="w-24 h-1.5 bg-indigo-600 mx-auto rounded-full" />
-              <p className="mt-4 text-slate-500 font-bold">سیستم هوشمند مدیریت و تقسیم اراضی</p>
+            {/* Certificate Header (20% of content) */}
+            <div className="flex justify-between items-start mb-8 border-b-4 border-slate-900 pb-6">
+              <div>
+                <h1 className="text-5xl font-black text-slate-900 mb-2 tracking-tighter">سند مالکیت دیجیتال</h1>
+                <p className="text-slate-500 font-bold text-lg">سیستم هوشمند مدیریت و کاداستر اراضی</p>
+              </div>
+              <div className="text-left">
+                <div className="bg-slate-900 text-white px-6 py-3 rounded-2xl font-black text-xl mb-2">
+                  کد سند: {parcel.id.slice(0, 8).toUpperCase()}
+                </div>
+                <p className="text-slate-400 font-bold text-sm">تاریخ صدور: {new Date().toLocaleDateString('fa-IR')}</p>
+              </div>
             </div>
 
-            {/* Owner Info Grid */}
-            <div className="grid grid-cols-2 gap-6 mb-12">
-              <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 flex items-center gap-4">
-                <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-sm">
-                  <User className="w-6 h-6 text-indigo-600" />
+            {/* Owner Info Summary */}
+            <div className="grid grid-cols-4 gap-4 mb-8">
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                <span className="text-[10px] font-black text-slate-400 block uppercase mb-1">نام مالک</span>
+                <span className="text-lg font-black text-slate-800">{parcel.ownerName || 'ناشناس'}</span>
+              </div>
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                <span className="text-[10px] font-black text-slate-400 block uppercase mb-1">مساحت (متر مربع)</span>
+                <span className="text-lg font-black text-slate-800">{parcel.area.toFixed(1)}</span>
+              </div>
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                <span className="text-[10px] font-black text-slate-400 block uppercase mb-1">مساحت (جریب)</span>
+                <span className="text-lg font-black text-emerald-700">{jarib}</span>
+              </div>
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                <span className="text-[10px] font-black text-slate-400 block uppercase mb-1">نسل تفکیک</span>
+                <span className="text-lg font-black text-amber-600">{parcel.generation || 1}</span>
+              </div>
+            </div>
+
+            {/* Map Section (80% of content) */}
+            <div className="relative">
+              <div className="absolute top-6 right-6 z-10 flex flex-col gap-2">
+                <div className="bg-white/90 backdrop-blur-sm p-3 rounded-2xl border border-slate-200 shadow-xl flex items-center gap-3">
+                  <div className="w-4 h-4 bg-emerald-600 rounded-md" />
+                  <span className="text-xs font-black text-slate-700">محدوده ملک شما</span>
                 </div>
-                <div>
-                  <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">نام مالک</span>
-                  <span className="text-lg font-black text-slate-800">{parcel.ownerName || 'نامشخص'}</span>
+                <div className="bg-white/90 backdrop-blur-sm p-3 rounded-2xl border border-slate-200 shadow-xl flex items-center gap-3">
+                  <div className="w-4 h-4 bg-slate-400 rounded-md" />
+                  <span className="text-xs font-black text-slate-700">املاک مجاور (همسایگان)</span>
                 </div>
               </div>
-              <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 flex items-center gap-4">
-                <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-sm">
-                  <Scale className="w-6 h-6 text-emerald-600" />
-                </div>
-                <div>
-                  <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">مساحت کل</span>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-lg font-black text-slate-800">{parcel.area.toFixed(1)} متر مربع</span>
-                    <span className="text-xs font-bold text-emerald-600">({jarib} جریب)</span>
+
+              {/* North Arrow */}
+              <div className="absolute top-6 left-6 z-10 bg-white/90 backdrop-blur-sm p-3 rounded-full border border-slate-200 shadow-xl">
+                <div className="flex flex-col items-center">
+                  <span className="text-[10px] font-black text-rose-600 mb-1">N</span>
+                  <div className="w-0.5 h-8 bg-slate-900 relative">
+                    <div className="absolute -top-1 -left-1 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-bottom-[8px] border-bottom-slate-900" />
                   </div>
                 </div>
               </div>
-              <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 flex items-center gap-4">
-                <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-sm">
-                  <Layers className="w-6 h-6 text-amber-600" />
-                </div>
-                <div>
-                  <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">نسل قطعه</span>
-                  <span className="text-lg font-black text-slate-800">نسل {parcel.generation || 1}</span>
-                </div>
-              </div>
-              <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 flex items-center gap-4">
-                <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-sm">
-                  <MapPin className="w-6 h-6 text-rose-600" />
-                </div>
-                <div>
-                  <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">تعداد نقاط مرزی</span>
-                  <span className="text-lg font-black text-slate-800">{parcel.pointIds.length} نقطه مختصاتی</span>
-                </div>
-              </div>
-            </div>
 
-            {/* Map Section */}
-            <div className="mb-12">
-              <h3 className="text-sm font-black text-slate-800 mb-4 flex items-center gap-2">
-                <div className="w-2 h-2 bg-indigo-600 rounded-full" />
-                نقشه هندسی و همسایگان
-              </h3>
-              <div className="h-[400px] w-full rounded-[32px] overflow-hidden border-2 border-slate-100 relative z-0">
+              <div className="h-[700px] w-full rounded-[40px] overflow-hidden border-4 border-slate-900 relative z-0 shadow-2xl">
                 <MapContainer
                   center={center}
-                  zoom={18}
+                  zoom={19}
                   className="w-full h-full"
                   zoomControl={false}
                   dragging={false}
                   scrollWheelZoom={false}
                   doubleClickZoom={false}
                 >
-                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" opacity={0.4} />
                   
-                  {/* Neighbors */}
+                  {/* Neighbors - More prominent for comparison */}
                   {neighbors.map(n => {
                     const nPoints = n.pointIds.map(id => allPoints.find(p => p.id === id)!).filter(Boolean);
+                    const nCentroid = turf.centroid(turf.polygon([[...nPoints.map(p => [p.lng, p.lat]), [nPoints[0].lng, nPoints[0].lat]]]));
+                    const [nLng, nLat] = nCentroid.geometry.coordinates;
+
                     return (
-                      <Polygon
-                        key={n.id}
-                        positions={nPoints.map(p => [p.lat, p.lng])}
-                        pathOptions={{ color: '#94a3b8', fillColor: '#f1f5f9', fillOpacity: 0.5, weight: 1 }}
-                      >
-                        <Tooltip permanent direction="center" className="neighbor-tooltip">
-                          <span className="text-[8px] font-bold text-slate-400">{n.ownerName || 'ناشناس'}</span>
-                        </Tooltip>
-                      </Polygon>
+                      <React.Fragment key={n.id}>
+                        <Polygon
+                          positions={nPoints.map(p => [p.lat, p.lng])}
+                          pathOptions={{ 
+                            color: '#64748b', 
+                            fillColor: '#94a3b8', 
+                            fillOpacity: 0.6, 
+                            weight: 2 
+                          }}
+                        />
+                        <Marker position={[nLat, nLng]} icon={transparentIcon}>
+                          <Tooltip permanent direction="center" className="neighbor-label">
+                            <span className="text-xs font-black text-slate-700">{n.ownerName || 'ناشناس'}</span>
+                          </Tooltip>
+                        </Marker>
+                      </React.Fragment>
                     );
                   })}
 
-                  {/* Target Parcel */}
+                  {/* Target Parcel - Highly Prominent */}
                   <Polygon
                     positions={parcelPoints.map(p => [p.lat, p.lng])}
-                    pathOptions={{ color: '#4f46e5', fillColor: '#4f46e5', fillOpacity: 0.2, weight: 3 }}
+                    pathOptions={{ 
+                      color: '#065f46', 
+                      fillColor: '#10b981', 
+                      fillOpacity: 0.3, 
+                      weight: 5,
+                      lineCap: 'round',
+                      lineJoin: 'round'
+                    }}
                   />
 
-                  {/* Points with Coordinates */}
+                  {/* Owner Name in Center of Target */}
+                  <Marker position={center} icon={transparentIcon}>
+                    <Tooltip permanent direction="center" className="target-label">
+                      <div className="flex flex-col items-center">
+                        <span className="text-lg font-black text-emerald-900">{parcel.ownerName || 'ناشناس'}</span>
+                        <span className="text-[10px] font-bold text-emerald-700">ملک موضوع سند</span>
+                      </div>
+                    </Tooltip>
+                  </Marker>
+
+                  {/* Points with Large Coordinate Labels */}
                   {parcelPoints.map((p, idx) => (
                     <Marker 
                       key={p.id} 
                       position={[p.lat, p.lng]} 
                       icon={L.divIcon({
-                        className: 'bg-indigo-600 w-2 h-2 rounded-full border border-white shadow-sm',
-                        iconSize: [8, 8],
-                        iconAnchor: [4, 4]
+                        className: 'bg-emerald-600 w-4 h-4 rounded-full border-2 border-white shadow-lg',
+                        iconSize: [16, 16],
+                        iconAnchor: [8, 8]
                       })}
                     >
-                      <Tooltip permanent direction="top" offset={[0, -5]} className="coord-tooltip">
-                        <div className="flex flex-col items-center text-[7px] font-mono leading-tight">
-                          <span>{p.lat.toFixed(6)}</span>
-                          <span>{p.lng.toFixed(6)}</span>
+                      <Tooltip permanent direction="top" offset={[0, -10]} className="coord-label-pro">
+                        <div className="flex flex-col items-center bg-slate-900 text-white px-3 py-2 rounded-xl shadow-2xl border border-white/20">
+                          <div className="flex items-center gap-2 border-b border-white/10 pb-1 mb-1 w-full justify-center">
+                            <MapPin className="w-3 h-3 text-emerald-400" />
+                            <span className="text-[10px] font-black">نقطه {idx + 1}</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 text-[9px] font-mono">
+                            <div className="flex flex-col">
+                              <span className="text-slate-400 text-[8px]">Lat:</span>
+                              <span className="text-emerald-400">{p.lat.toFixed(7)}</span>
+                            </div>
+                            <div className="flex flex-col">
+                              <span className="text-slate-400 text-[8px]">Lng:</span>
+                              <span className="text-emerald-400">{p.lng.toFixed(7)}</span>
+                            </div>
+                          </div>
                         </div>
                       </Tooltip>
                     </Marker>
@@ -205,16 +245,31 @@ const DigitalCertificateModal: React.FC<DigitalCertificateModalProps> = ({
               </div>
             </div>
 
-            {/* Footer Info */}
-            <div className="border-t-2 border-dashed border-slate-100 pt-8 flex justify-between items-end">
-              <div className="text-right">
-                <p className="text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-widest">تاریخ صدور</p>
-                <p className="text-sm font-black text-slate-800">{new Date().toLocaleDateString('fa-IR')}</p>
-              </div>
-              <div className="text-left">
-                <div className="w-20 h-20 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-center">
-                  <span className="text-[8px] text-slate-300 font-bold text-center px-2">کد امنیتی دیجیتال</span>
+            {/* Security Footer */}
+            <div className="mt-12 flex justify-between items-center bg-slate-50 p-8 rounded-[32px] border-2 border-slate-200">
+              <div className="flex gap-8">
+                <div className="text-right">
+                  <p className="text-[10px] font-black text-slate-400 mb-1 uppercase tracking-widest">مهر و امضای دیجیتال</p>
+                  <div className="w-32 h-16 border-2 border-indigo-100 rounded-2xl bg-white flex items-center justify-center">
+                    <div className="w-12 h-12 rounded-full border-4 border-indigo-600/20 flex items-center justify-center">
+                      <div className="w-6 h-6 rounded-full bg-indigo-600/10" />
+                    </div>
+                  </div>
                 </div>
+                <div className="text-right">
+                  <p className="text-[10px] font-black text-slate-400 mb-1 uppercase tracking-widest">تأییدیه کاداستر</p>
+                  <div className="w-32 h-16 border-2 border-emerald-100 rounded-2xl bg-white flex items-center justify-center">
+                    <CheckCircle2 className="w-8 h-8 text-emerald-600/30" />
+                  </div>
+                </div>
+              </div>
+              <div className="text-left flex flex-col items-end">
+                <div className="w-24 h-24 bg-white p-2 rounded-2xl border-2 border-slate-200 shadow-sm mb-2">
+                  <div className="w-full h-full bg-slate-100 rounded-lg flex items-center justify-center">
+                    <span className="text-[8px] text-slate-400 font-black text-center">QR CODE<br/>SECURITY</span>
+                  </div>
+                </div>
+                <p className="text-[10px] font-black text-slate-400">اصالت این سند از طریق سامانه مرکزی قابل استعلام است</p>
               </div>
             </div>
           </div>
@@ -255,11 +310,37 @@ const DigitalCertificateModal: React.FC<DigitalCertificateModalProps> = ({
             margin: 0;
             background: white;
           }
-          .coord-tooltip, .neighbor-tooltip {
+          .coord-tooltip, .neighbor-tooltip, .neighbor-label, .target-label, .coord-label-pro {
             background: transparent !important;
             border: none !important;
             box-shadow: none !important;
           }
+        }
+        .neighbor-label, .target-label {
+          background: transparent !important;
+          border: none !important;
+          box-shadow: none !important;
+        }
+        .neighbor-label span {
+          background: white;
+          padding: 2px 6px;
+          border-radius: 4px;
+          border: 1px solid #cbd5e1;
+          white-space: nowrap;
+        }
+        .target-label div {
+          background: #065f46;
+          color: white;
+          padding: 4px 12px;
+          border-radius: 8px;
+          border: 2px solid white;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+          white-space: nowrap;
+        }
+        .coord-label-pro {
+          background: transparent !important;
+          border: none !important;
+          box-shadow: none !important;
         }
         .neighbor-tooltip, .coord-tooltip {
           background: white;
