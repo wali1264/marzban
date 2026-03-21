@@ -33,7 +33,8 @@ interface MapViewProps {
   showUserLocation: boolean;
   selectedPointId: string | null;
   trackingTargetId?: string | null;
-  centerTrigger?: number; // Used to trigger centering
+  centerTrigger?: number;
+  parcelCenterTrigger?: number;
   parcels?: Parcel[];
   generationFilter?: number;
   highlightedParcelId?: string | null;
@@ -72,7 +73,7 @@ function findCycles(points: Point[], connections: Connection[]): Point[][] {
         continue;
       }
 
-      if (path.length > 15) continue; // Limit depth to prevent infinite loops/performance issues
+      if (path.length > 50) continue; // Limit depth to prevent infinite loops/performance issues
 
       const neighbors = adj.get(u) || [];
       for (const v of neighbors) {
@@ -125,6 +126,7 @@ interface MapControllerProps {
   highlightedParcelCenter?: { lat: number; lng: number };
   highlightedParcelId?: string | null;
   centerTrigger?: number;
+  parcelCenterTrigger?: number;
 }
 
 function MapController({ 
@@ -132,11 +134,13 @@ function MapController({
   points,
   highlightedParcelCenter,
   highlightedParcelId,
-  centerTrigger
+  centerTrigger,
+  parcelCenterTrigger
 }: MapControllerProps) {
   const map = useMap();
   const [hasInitialFit, setHasInitialFit] = useState(false);
   const lastTrigger = useRef<number>(0);
+  const lastParcelTrigger = useRef<number>(0);
 
   // Initial fit to points - only once
   useEffect(() => {
@@ -150,14 +154,15 @@ function MapController({
   // Manual center on user or highlighted parcel
   useEffect(() => {
     // If we have a highlighted parcel and it's a new trigger or new ID
-    if (highlightedParcelId && highlightedParcelCenter) {
+    if (highlightedParcelId && highlightedParcelCenter && parcelCenterTrigger !== lastParcelTrigger.current) {
       map.setView([highlightedParcelCenter.lat, highlightedParcelCenter.lng], 18);
-      lastTrigger.current = centerTrigger || 0;
-    } else if (centerOn) {
+      lastParcelTrigger.current = parcelCenterTrigger || 0;
+    } else if (centerOn && centerTrigger !== lastTrigger.current) {
       // Manual center trigger (e.g. user location button)
       map.setView([centerOn.lat, centerOn.lng], map.getZoom() > 18 ? map.getZoom() : 18);
+      lastTrigger.current = centerTrigger || 0;
     }
-  }, [centerOn, highlightedParcelCenter, highlightedParcelId, map, centerTrigger]);
+  }, [centerOn, highlightedParcelCenter, highlightedParcelId, map, centerTrigger, parcelCenterTrigger]);
 
   return null;
 }
@@ -190,12 +195,13 @@ export default function MapView({
   selectedPointId,
   trackingTargetId,
   centerTrigger,
+  parcelCenterTrigger,
   parcels = [],
   generationFilter = 1,
   highlightedParcelId = null
 }: MapViewProps) {
   
-  const cycles = findCycles(points, connections);
+  const cycles = useMemo(() => findCycles(points, connections), [points, connections]);
   const [zoom, setZoom] = useState(13);
 
   const trackingTarget = useMemo(() => 
@@ -216,13 +222,19 @@ export default function MapView({
   // Calculate generations for each cycle/parcel
   const cyclesWithGen = useMemo(() => {
     const polys = cycles.map(cycle => {
-      const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
-      return { 
-        cycle, 
-        poly: turf.polygon([coords as any]),
-        connectionIds: new Set<string>()
-      };
-    });
+      if (cycle.length < 3) return null;
+      try {
+        const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
+        return { 
+          cycle, 
+          poly: turf.polygon([coords as any]),
+          connectionIds: new Set<string>()
+        };
+      } catch (e) {
+        console.error("Error creating polygon for cycle:", e);
+        return null;
+      }
+    }).filter((p): p is NonNullable<typeof p> => p !== null);
 
     // Map connections to their IDs for easy lookup
     polys.forEach(item => {
@@ -520,6 +532,7 @@ export default function MapView({
           highlightedParcelCenter={highlightedParcelCenter || undefined}
           highlightedParcelId={highlightedParcelId}
           centerTrigger={centerTrigger}
+          parcelCenterTrigger={parcelCenterTrigger}
         />
         
         {/* Live User Location - Only shown if toggled ON */}
