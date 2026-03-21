@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   MapPin, 
@@ -37,35 +37,24 @@ import {
   KeyRound,
   Database,
   Zap,
-  RotateCcw,
-  Printer,
-  Bluetooth,
-  Cpu,
-  Wifi
+  RotateCcw
 } from 'lucide-react';
 import * as turf from '@turf/turf';
 import MapView from './components/Map/MapView';
 import PrecisionRecorder from './components/Recorder/PrecisionRecorder';
 import BackupModal from './components/Backup/BackupModal';
 import ConvertModal from './components/Convert/ConvertModal';
-import DigitalCertificateModal from './components/Map/DigitalCertificateModal';
 import { RotationModal } from './components/Map/RotationModal';
-import GNSSSettings from './components/GNSS/GNSSSettings';
-import { Point, Connection, AppMode, Parcel, Partner, Division, GNSSConfig, GNSSStatus } from './types';
+import { Point, Connection, AppMode, Parcel, Partner, Division } from './types';
 import { cn } from './utils';
 import { geminiService } from './services/gemini';
-import { GNSSBluetoothManager, parseGPGGA } from './services/gnssService';
 
 export default function App() {
   const [points, setPoints] = useState<Point[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [mode, setMode] = useState<AppMode>('VIEW');
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number; accuracy: number }>();
-  const [rawLocation, setRawLocation] = useState<{ lat: number; lng: number; accuracy: number }>();
-  const locationBuffer = useRef<{ lat: number; lng: number; accuracy: number }[]>([]);
-  const MAX_BUFFER_SIZE = 10; // Increased buffer for better weighted smoothing
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
-  const [trackingTargetId, setTrackingTargetId] = useState<string | null>(null);
   const [showRecorder, setShowRecorder] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [centerTrigger, setCenterTrigger] = useState(0);
@@ -85,17 +74,12 @@ export default function App() {
   const [ownerNameInput, setOwnerNameInput] = useState('');
 
   const [isSearchActive, setIsSearchActive] = useState(false);
-  const [isPrintMode, setIsPrintMode] = useState(false);
-  const [selectedParcelForCertificate, setSelectedParcelForCertificate] = useState<Parcel | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isGenMenuOpen, setIsGenMenuOpen] = useState(false);
   const [highlightedParcelId, setHighlightedParcelId] = useState<string | null>(null);
 
-  const [isAdmin, setIsAdmin] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
-  const [isAreaMode, setIsAreaMode] = useState(false);
-  const [isEditAreaMode, setIsEditAreaMode] = useState(false);
-  const [shareInputValue, setShareInputValue] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
   const [loginError, setLoginError] = useState(false);
 
@@ -111,119 +95,23 @@ export default function App() {
   const [selectedParcelForConversion, setSelectedParcelForConversion] = useState<Parcel | null>(null);
   const [selectedDivisionForConversion, setSelectedDivisionForConversion] = useState<Division | null>(null);
 
-  const [gnssConfig, setGnssConfig] = useState<GNSSConfig>({
-    source: 'INTERNAL'
-  });
-  const [gnssStatus, setGnssStatus] = useState<GNSSStatus>({
-    connected: false,
-    fixType: 'NONE',
-    satellites: 0,
-    hdop: 0,
-    lat: 0,
-    lng: 0,
-    altitude: 0,
-    accuracy: 0,
-    timestamp: 0
-  });
-
-  const gnssManager = useMemo(() => new GNSSBluetoothManager(), []);
-
-  const APP_VERSION = '1.1.0';
-
   // Load from local storage on mount
   useEffect(() => {
     const savedPoints = localStorage.getItem('marzban_points');
     const savedConnections = localStorage.getItem('marzban_connections');
     const savedParcels = localStorage.getItem('marzban_parcels');
-    const savedVersion = localStorage.getItem('marzban_version');
-
-    let parsedPoints: Point[] = savedPoints ? JSON.parse(savedPoints) : [];
-    let parsedConnections: Connection[] = savedConnections ? JSON.parse(savedConnections) : [];
-    let parsedParcels: Parcel[] = savedParcels ? JSON.parse(savedParcels) : [];
-
-    // Data Sanitization & Migration
-    let needsSave = false;
-    parsedParcels = parsedParcels.map((p: any) => {
-      let updated = false;
-      // Ensure area exists
-      if (p.area === undefined || p.area === null) {
-        try {
-          const cycle = p.pointIds.map((id: string) => parsedPoints.find((pt: any) => pt.id === id)).filter(Boolean);
-          if (cycle.length >= 3) {
-            const poly = turf.polygon([[...cycle.map((pt: any) => [pt.lng, pt.lat]), [cycle[0].lng, cycle[0].lat]]]);
-            p.area = turf.area(poly);
-          } else {
-            p.area = 0;
-          }
-        } catch (e) {
-          p.area = 0;
-        }
-        updated = true;
-      }
-      // Ensure generation exists
-      if (p.generation === undefined || p.generation === null) {
-        p.generation = 1;
-        updated = true;
-      }
-      if (updated) needsSave = true;
-      return p;
-    });
-
-    setPoints(parsedPoints);
-    setConnections(parsedConnections);
-    setParcels(parsedParcels);
-    
-    if (savedVersion !== APP_VERSION || needsSave) {
-      localStorage.setItem('marzban_version', APP_VERSION);
-      localStorage.setItem('marzban_points', JSON.stringify(parsedPoints));
-      localStorage.setItem('marzban_connections', JSON.stringify(parsedConnections));
-      localStorage.setItem('marzban_parcels', JSON.stringify(parsedParcels));
-    }
-
-    const savedGnssConfig = localStorage.getItem('marzban_gnss_config');
-    if (savedGnssConfig) {
-      setGnssConfig(JSON.parse(savedGnssConfig));
-    }
+    if (savedPoints) setPoints(JSON.parse(savedPoints));
+    if (savedConnections) setConnections(JSON.parse(savedConnections));
+    if (savedParcels) setParcels(JSON.parse(savedParcels));
   }, []);
 
   const [hasZoomedForLocation, setHasZoomedForLocation] = useState(false);
 
-  // GNSS Bluetooth Data Stream
-  useEffect(() => {
-    if (gnssConfig.source === 'EXTERNAL' && gnssStatus.connected) {
-      gnssManager.onData((sentence) => {
-        const parsed = parseGPGGA(sentence);
-        if (parsed) {
-          setGnssStatus(prev => ({
-            ...prev,
-            ...parsed,
-            connected: true
-          }));
-        }
-      });
-    }
-  }, [gnssConfig.source, gnssStatus.connected, gnssManager]);
-
   // Live Location Tracking - Only active when showUserLocation is true
   useEffect(() => {
-    if (!showUserLocation) {
+    if (!navigator.geolocation || !showUserLocation) {
       setUserLocation(undefined);
       setHasZoomedForLocation(false);
-      return;
-    }
-
-    if (gnssConfig.source === 'EXTERNAL' && gnssStatus.connected) {
-      // Use external GNSS data
-      setRawLocation({
-        lat: gnssStatus.lat,
-        lng: gnssStatus.lng,
-        accuracy: gnssStatus.accuracy
-      });
-      return;
-    }
-
-    if (!navigator.geolocation) {
-      setRawLocation(undefined);
       return;
     }
 
@@ -234,55 +122,14 @@ export default function App() {
           lng: pos.coords.longitude,
           accuracy: pos.coords.accuracy
         };
-        setRawLocation(loc);
+        setUserLocation(loc);
       },
       (err) => console.error(err),
       { enableHighAccuracy: true }
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [showUserLocation, gnssConfig.source, gnssStatus.connected, gnssStatus.lat, gnssStatus.lng, gnssStatus.accuracy]);
-
-  // Apply smoothing and offset to raw location
-  useEffect(() => {
-    if (!rawLocation) {
-      setUserLocation(undefined);
-      return;
-    }
-
-    // 1. Weighted Smoothing (Inverse Variance Weighting)
-    locationBuffer.current.push({ 
-      lat: rawLocation.lat, 
-      lng: rawLocation.lng, 
-      accuracy: rawLocation.accuracy 
-    });
-    if (locationBuffer.current.length > MAX_BUFFER_SIZE) {
-      locationBuffer.current.shift();
-    }
-
-    let totalWeight = 0;
-    let weightedLat = 0;
-    let weightedLng = 0;
-    let minAccuracy = rawLocation.accuracy;
-
-    locationBuffer.current.forEach(p => {
-      // Weight is 1/accuracy^2. Higher accuracy (lower number) gets much more weight.
-      const weight = 1 / Math.pow(Math.max(0.1, p.accuracy), 2);
-      totalWeight += weight;
-      weightedLat += p.lat * weight;
-      weightedLng += p.lng * weight;
-      if (p.accuracy < minAccuracy) minAccuracy = p.accuracy;
-    });
-
-    // 2. Apply Manual Offset
-    const offset = gnssConfig.locationOffset || { lat: 0, lng: 0 };
-    
-    setUserLocation({
-      lat: (weightedLat / totalWeight) + offset.lat,
-      lng: (weightedLng / totalWeight) + offset.lng,
-      accuracy: minAccuracy
-    });
-  }, [rawLocation, gnssConfig.locationOffset]);
+  }, [showUserLocation]);
 
   // One-time zoom when turning on location and first fix is received
   useEffect(() => {
@@ -331,11 +178,6 @@ export default function App() {
   };
 
   const handlePointClick = (point: Point) => {
-    if (mode === 'TRACKING') {
-      setTrackingTargetId(point.id);
-      setSelectedPointId(point.id);
-      return;
-    }
     if (mode === 'CONNECT') {
       if (selectedPointId && selectedPointId !== point.id) {
         // Create connection from selected to clicked
@@ -668,12 +510,7 @@ export default function App() {
   const handleUpdateDivision = () => {
     if (pendingDivisionAction && editPercentage) {
       const { parcelId, divId } = pendingDivisionAction;
-      let newPercent = parseFloat(editPercentage);
-      
-      const targetParcel = parcels.find(p => p.id === parcelId);
-      if (isEditAreaMode && targetParcel && targetParcel.area > 0) {
-        newPercent = (newPercent / targetParcel.area) * 100;
-      }
+      const newPercent = parseFloat(editPercentage);
       
       setParcels(prev => prev.map(p => {
         if (p.id !== parcelId) return p;
@@ -695,7 +532,6 @@ export default function App() {
       }));
       setPendingDivisionAction(null);
       setEditPercentage('');
-      setIsEditAreaMode(false);
     }
   };
 
@@ -715,29 +551,6 @@ export default function App() {
       setShowOwnerModal(false);
       setSelectedParcelForOwner(null);
       setOwnerNameInput('');
-    }
-  };
-
-  const handleGnssConnect = async () => {
-    try {
-      const deviceName = await gnssManager.connect();
-      setGnssConfig(prev => {
-        const newConfig = { ...prev, bluetoothDeviceName: deviceName };
-        localStorage.setItem('marzban_gnss_config', JSON.stringify(newConfig));
-        return newConfig;
-      });
-      setGnssStatus(prev => ({ ...prev, connected: true }));
-    } catch (error) {
-      alert("خطا در اتصال به دستگاه GNSS. اطمینان حاصل کنید که بلوتوث روشن است.");
-    }
-  };
-
-  const handleSaveGnssConfig = (config: GNSSConfig) => {
-    setGnssConfig(config);
-    localStorage.setItem('marzban_gnss_config', JSON.stringify(config));
-    if (config.source === 'INTERNAL') {
-      gnssManager.disconnect();
-      setGnssStatus(prev => ({ ...prev, connected: false }));
     }
   };
 
@@ -799,54 +612,7 @@ export default function App() {
     setShowRecorder(true);
   };
 
-  const calibrateLocation = (targetPoint: Point) => {
-    if (!rawLocation) {
-      alert("ابتدا مکان خود را روشن کنید.");
-      return;
-    }
-    
-    // Calculate the difference between where we ARE and where the target point IS
-    const offset = {
-      lat: targetPoint.lat - rawLocation.lat,
-      lng: targetPoint.lng - rawLocation.lng
-    };
-    
-    const newConfig = { ...gnssConfig, locationOffset: offset };
-    setGnssConfig(newConfig);
-    localStorage.setItem('marzban_gnss_config', JSON.stringify(newConfig));
-    alert("کالیبراسیون با موفقیت انجام شد. مکان شما اکنون با نقطه هدف منطبق است.");
-  };
-
-  const resetCalibration = () => {
-    const newConfig = { ...gnssConfig, locationOffset: { lat: 0, lng: 0 } };
-    setGnssConfig(newConfig);
-    localStorage.setItem('marzban_gnss_config', JSON.stringify(newConfig));
-    alert("کالیبراسیون بازنشانی شد.");
-  };
-
-  useEffect(() => {
-    if (mode === 'TRACKING') {
-      setShowUserLocation(true);
-    } else {
-      setTrackingTargetId(null);
-    }
-  }, [mode]);
-
   const selectedPoint = points.find(p => p.id === selectedPointId);
-  const trackingTarget = points.find(p => p.id === trackingTargetId);
-
-  const selectedParcelArea = useMemo(() => {
-    if (!selectedCycle || selectedCycle.length < 3) return 0;
-    try {
-      const poly = turf.polygon([[...selectedCycle.map(p => [p.lng, p.lat]), [selectedCycle[0].lng, selectedCycle[0].lat]]]);
-      return turf.area(poly);
-    } catch (e) {
-      return 0;
-    }
-  }, [selectedCycle]);
-
-  const editingParcel = pendingDivisionAction ? parcels.find(p => p.id === pendingDivisionAction.parcelId) : null;
-  const editingParcelArea = editingParcel?.area || 0;
 
   return (
     <div className="flex flex-col h-screen w-full bg-slate-50 overflow-hidden font-sans" dir="rtl">
@@ -912,17 +678,6 @@ export default function App() {
            </button>
 
            <button 
-              onClick={() => setMode('GNSS_SETTINGS')}
-              className={cn(
-                "p-2 rounded-full transition-colors",
-                mode === 'GNSS_SETTINGS' ? "bg-emerald-100 text-emerald-600" : "text-slate-500 hover:bg-slate-100"
-              )}
-              title="تنظیمات GNSS"
-            >
-              <Cpu className="w-5 h-5" />
-            </button>
-
-           <button 
              onClick={() => setShowBackupModal(true)}
              className="p-2 rounded-full text-slate-500 hover:bg-slate-100 transition-colors"
              title="پشتیبان‌گیری"
@@ -970,6 +725,24 @@ export default function App() {
                </button>
              </div>
            )}
+
+           <button 
+             onClick={() => {
+               if (isAdmin) {
+                 setIsAdmin(false);
+                 setMode('VIEW');
+               } else {
+                 setShowAdminModal(true);
+               }
+             }}
+             className={cn(
+               "p-2 rounded-full transition-all duration-300",
+               isAdmin ? "bg-emerald-100 text-emerald-600" : "bg-slate-100 text-slate-400 hover:bg-slate-200"
+             )}
+             title={isAdmin ? "خروج از مدیریت" : "ورود مدیر"}
+           >
+             {isAdmin ? <ShieldCheck className="w-5 h-5" /> : <Lock className="w-5 h-5" />}
+           </button>
         </div>
       </header>
 
@@ -982,7 +755,6 @@ export default function App() {
           onPointClick={handlePointClick}
           onMapClick={() => {
             setSelectedPointId(null);
-            if (mode === 'TRACKING') setTrackingTargetId(null);
             if (isSearchActive && !searchQuery) setIsSearchActive(false);
           }}
           onConnectionClick={handleConnectionClick}
@@ -1001,7 +773,6 @@ export default function App() {
           userLocation={userLocation}
           showUserLocation={showUserLocation}
           selectedPointId={selectedPointId}
-          trackingTargetId={trackingTargetId}
           centerTrigger={centerTrigger}
           parcels={parcels}
           generationFilter={generationFilter}
@@ -1046,17 +817,6 @@ export default function App() {
             </>
           )}
           
-          <button 
-            onClick={() => setMode('TRACKING')}
-            className={cn(
-              "p-3 rounded-2xl shadow-xl transition-all",
-              mode === 'TRACKING' ? "bg-amber-600 text-white" : "bg-white text-slate-600"
-            )}
-            title="حالت ردیابی و یافتن میخ"
-          >
-            <Crosshair className="w-6 h-6" />
-          </button>
-
           <div className="h-px bg-slate-200 my-1" />
 
           <button 
@@ -1099,14 +859,12 @@ export default function App() {
                       <button
                         key={parcel.id}
                         onClick={() => {
-                          if (isPrintMode) {
-                            setSelectedParcelForCertificate(parcel);
-                          } else {
-                            setHighlightedParcelId(parcel.id);
-                            setCenterTrigger(prev => prev + 1);
-                            setIsSearchActive(false);
-                            setSearchQuery('');
-                          }
+                          setHighlightedParcelId(parcel.id);
+                          setCenterTrigger(prev => prev + 1);
+                          // Zoom to parcel logic: we need to find the center of the parcel
+                          // MapView handles centering via centerTrigger, but we need to tell it which point to center on
+                          // For now, MapView centers on user location if available, or just triggers a re-render
+                          // I'll update MapView to handle centering on a specific parcel if highlightedParcelId is set
                         }}
                         className={cn(
                           "w-full px-5 py-4 text-right flex items-center justify-between border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors",
@@ -1115,12 +873,9 @@ export default function App() {
                       >
                         <div className="flex flex-col items-start text-right w-full">
                           <span className="font-bold text-sm">{parcel.ownerName}</span>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-[10px] text-slate-400">مساحت: {(parcel.area || 0).toFixed(1)} متر مربع</span>
-                            <span className="text-[10px] text-indigo-400 font-bold bg-indigo-50 px-1.5 py-0.5 rounded-md">نسل {parcel.generation || 1}</span>
-                          </div>
+                          <span className="text-[10px] text-slate-400">قطعه زمین شماره {parcel.id.slice(0, 4)}</span>
                         </div>
-                        {isPrintMode ? <Printer className="w-4 h-4 text-slate-400" /> : <Navigation className="w-4 h-4 text-slate-300" />}
+                        <Navigation className="w-4 h-4 text-slate-300" />
                       </button>
                     ))
                 ) : (
@@ -1159,21 +914,9 @@ export default function App() {
                   dir="rtl"
                 />
                 {searchQuery && (
-                  <div className="flex items-center gap-2">
-                    <button 
-                      onClick={() => setIsPrintMode(!isPrintMode)}
-                      className={cn(
-                        "p-1.5 rounded-lg transition-colors",
-                        isPrintMode ? "bg-slate-800 text-white" : "text-slate-400 hover:bg-slate-200"
-                      )}
-                      title="حالت چاپ سند"
-                    >
-                      <Printer className="w-4 h-4" />
-                    </button>
-                    <button onClick={() => { setSearchQuery(''); setHighlightedParcelId(null); }}>
-                      <X className="w-4 h-4 text-slate-400" />
-                    </button>
-                  </div>
+                  <button onClick={() => { setSearchQuery(''); setHighlightedParcelId(null); }}>
+                    <X className="w-4 h-4 text-slate-400" />
+                  </button>
                 )}
               </div>
             )}
@@ -1218,28 +961,20 @@ export default function App() {
               </div>
               
               {isAdmin && (
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-3">
                   <button 
                     onClick={() => deletePoint(selectedPoint.id)}
-                    className="flex flex-col items-center justify-center gap-1 py-3 bg-rose-50 text-rose-600 rounded-2xl font-bold hover:bg-rose-100 transition-colors"
+                    className="flex items-center justify-center gap-2 py-4 bg-rose-50 text-rose-600 rounded-2xl font-bold hover:bg-rose-100 transition-colors"
                   >
-                    <Trash2 className="w-4 h-4" />
-                    <span className="text-[10px]">حذف</span>
+                    <Trash2 className="w-5 h-5" />
+                    حذف
                   </button>
                   <button 
                     onClick={startUpdate}
-                    className="flex flex-col items-center justify-center gap-1 py-3 bg-amber-50 text-amber-600 rounded-2xl font-bold hover:bg-amber-100 transition-colors"
+                    className="flex items-center justify-center gap-2 py-4 bg-amber-50 text-amber-600 rounded-2xl font-bold hover:bg-amber-100 transition-colors"
                   >
-                    <RefreshCw className="w-4 h-4" />
-                    <span className="text-[10px]">بروزرسانی</span>
-                  </button>
-                  <button 
-                    onClick={() => calibrateLocation(selectedPoint)}
-                    className="flex flex-col items-center justify-center gap-1 py-3 bg-blue-50 text-blue-600 rounded-2xl font-bold hover:bg-blue-100 transition-colors"
-                    title="تنظیم مکان من بر روی این نقطه"
-                  >
-                    <Target className="w-4 h-4" />
-                    <span className="text-[10px]">کالیبره</span>
+                    <RefreshCw className="w-5 h-5" />
+                    بروزرسانی
                   </button>
                 </div>
               )}
@@ -1253,21 +988,9 @@ export default function App() {
             <PrecisionRecorder 
               onConfirm={handleRecorderConfirm}
               onCancel={() => { setShowRecorder(false); setIsUpdating(false); }}
-              gnssStatus={gnssStatus}
-              gnssConfig={gnssConfig}
             />
           )}
         </AnimatePresence>
-        {mode === 'GNSS_SETTINGS' && (
-          <GNSSSettings
-            config={gnssConfig}
-            status={gnssStatus}
-            onSave={handleSaveGnssConfig}
-            onConnect={handleGnssConnect}
-            onResetCalibration={resetCalibration}
-            onClose={() => setMode('VIEW')}
-          />
-        )}
       </main>
 
       {/* Mode Indicator */}
@@ -1331,17 +1054,11 @@ export default function App() {
                 <form onSubmit={(e) => {
                   e.preventDefault();
                   const formData = new FormData(e.currentTarget);
-                  const name = formData.get('name') as string;
-                  const orientation = formData.get('orientation') as 'HORIZONTAL' | 'VERTICAL';
-                  const rawValue = Number(shareInputValue);
-                  
-                  let percentage = rawValue;
-                  if (isAreaMode && selectedParcelArea > 0) {
-                    percentage = (rawValue / selectedParcelArea) * 100;
-                  }
-
-                  handleAddDivision(name, percentage, orientation);
-                  setShareInputValue('');
+                  handleAddDivision(
+                    formData.get('name') as string,
+                    Number(formData.get('percentage')),
+                    formData.get('orientation') as 'HORIZONTAL' | 'VERTICAL'
+                  );
                 }}>
                   <div className="space-y-4">
                     <div>
@@ -1354,32 +1071,16 @@ export default function App() {
                       />
                     </div>
                     <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <label className="text-sm font-bold text-slate-700">
-                          {isAreaMode ? "مساحت سهم (متر مربع)" : "درصد سهم (٪)"}
-                        </label>
-                        <button 
-                          type="button"
-                          onClick={() => setIsAreaMode(!isAreaMode)}
-                          className="text-[10px] font-bold px-2 py-1 rounded-lg bg-amber-100 text-amber-600 hover:bg-amber-200 transition-colors"
-                        >
-                          {isAreaMode ? "تغییر به درصد" : "تغییر به متر مربع"}
-                        </button>
-                      </div>
+                      <label className="block text-sm font-bold text-slate-700 mb-2">درصد سهم (٪)</label>
                       <input 
-                        value={shareInputValue}
-                        onChange={(e) => setShareInputValue(e.target.value)}
+                        name="percentage"
                         type="number"
-                        step="0.01"
+                        min="1"
+                        max="100"
                         required
                         className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-4 py-3 focus:border-blue-500 focus:outline-none transition-colors"
-                        placeholder={isAreaMode ? "مثلاً: ۵۰۰" : "مثلاً: ۲۵"}
+                        placeholder="مثلاً: ۵۰"
                       />
-                      {isAreaMode && selectedParcelArea > 0 && shareInputValue && (
-                        <p className="mt-2 text-[10px] text-indigo-600 font-bold bg-indigo-50 p-2 rounded-xl">
-                          محاسبه خودکار: {((Number(shareInputValue) / selectedParcelArea) * 100).toFixed(2)}٪ از کل {selectedParcelArea.toFixed(1)} متر مربع
-                        </p>
-                      )}
                     </div>
                     <div>
                       <label className="block text-sm font-bold text-slate-700 mb-2">جهت تقسیم</label>
@@ -1457,7 +1158,7 @@ export default function App() {
                         <div className="flex justify-between items-center mb-3">
                           <span className="font-bold text-slate-900">{parcel.name}</span>
                           <span className="text-xs font-mono text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg">
-                            {(parcel.area || 0).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} m²
+                            {parcel.area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })} m²
                           </span>
                         </div>
                         
@@ -1468,7 +1169,7 @@ export default function App() {
                                 <span className="text-slate-700">{div.partnerId}</span>
                                 <div className="flex items-center gap-2">
                                   <span className="font-bold text-blue-600">{div.percentage}%</span>
-                                  <span className="text-slate-400">({((parcel.area || 0) * div.percentage / 100).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} m²)</span>
+                                  <span className="text-slate-400">({(parcel.area * div.percentage / 100).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} m²)</span>
                                 </div>
                               </div>
                             ))}
@@ -1793,32 +1494,15 @@ export default function App() {
                 ) : (
                   <div className="space-y-6">
                     <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <label className="text-sm font-bold text-slate-700">
-                          {isEditAreaMode ? "مساحت جدید سهم (متر مربع)" : "درصد جدید سهم (٪)"}
-                        </label>
-                        <button 
-                          type="button"
-                          onClick={() => setIsEditAreaMode(!isEditAreaMode)}
-                          className="text-[10px] font-bold px-2 py-1 rounded-lg bg-amber-100 text-amber-600 hover:bg-amber-200 transition-colors"
-                        >
-                          {isEditAreaMode ? "تغییر به درصد" : "تغییر به متر مربع"}
-                        </button>
-                      </div>
+                      <label className="block text-sm font-bold text-slate-700 mb-2">درصد جدید سهم (٪)</label>
                       <input 
                         type="number"
-                        step="0.01"
                         value={editPercentage}
                         onChange={(e) => setEditPercentage(e.target.value)}
                         className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-4 py-4 focus:border-blue-500 focus:outline-none transition-colors text-xl font-mono"
-                        placeholder={isEditAreaMode ? "مثلاً: ۵۰۰" : "مثلاً: ۲۵"}
+                        placeholder="مثلاً: ۲۵"
                         autoFocus
                       />
-                      {isEditAreaMode && editingParcelArea > 0 && editPercentage && (
-                        <p className="mt-2 text-[10px] text-indigo-600 font-bold bg-indigo-50 p-2 rounded-xl">
-                          محاسبه خودکار: {((Number(editPercentage) / editingParcelArea) * 100).toFixed(2)}٪ از کل {editingParcelArea.toFixed(1)} متر مربع
-                        </p>
-                      )}
                     </div>
                     
                     <div className="grid grid-cols-2 gap-3">
@@ -1883,18 +1567,6 @@ export default function App() {
         }}
         parcelName={selectedParcelForRotation?.name}
       />
-
-      {/* Digital Certificate Modal */}
-      <AnimatePresence>
-        {selectedParcelForCertificate && (
-          <DigitalCertificateModal 
-            parcel={selectedParcelForCertificate}
-            allParcels={parcels}
-            allPoints={points}
-            onClose={() => setSelectedParcelForCertificate(null)}
-          />
-        )}
-      </AnimatePresence>
     </div>
   );
 }
