@@ -44,4 +44,27 @@ export interface Parcel {
   generation?: number; // 1 for root, 2 for nested, etc.
 }
 
-export type AppMode = 'VIEW' | 'RECORD' | 'CONNECT' | 'EDIT' | 'DIVIDE' | 'MANAGE' | 'CONVERT' | 'ROTATE';
+export interface GNSSConfig {
+  source: 'INTERNAL' | 'EXTERNAL';
+  bluetoothDeviceName?: string;
+  ntripHost?: string;
+  ntripPort?: number;
+  ntripMountpoint?: string;
+  ntripUser?: string;
+  ntripPass?: string;
+  locationOffset?: { lat: number; lng: number };
+}
+
+export interface GNSSStatus {
+  connected: boolean;
+  fixType: 'NONE' | '2D' | '3D' | 'DGPS' | 'FLOAT' | 'FIXED';
+  satellites: number;
+  hdop: number;
+  lat: number;
+  lng: number;
+  altitude: number;
+  accuracy: number;
+  timestamp: number;
+}
+
+export type AppMode = 'VIEW' | 'RECORD' | 'CONNECT' | 'EDIT' | 'DIVIDE' | 'MANAGE' | 'CONVERT' | 'ROTATE' | 'TRACKING' | 'GNSS_SETTINGS';

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, Marker, Polyline, Circle, Polygon, Tooltip, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import * as turf from '@turf/turf';
@@ -31,6 +32,7 @@ interface MapViewProps {
   userLocation?: { lat: number; lng: number; accuracy: number };
   showUserLocation: boolean;
   selectedPointId: string | null;
+  trackingTargetId?: string | null;
   centerTrigger?: number; // Used to trigger centering
   parcels?: Parcel[];
   generationFilter?: number;
@@ -70,7 +72,7 @@ function findCycles(points: Point[], connections: Connection[]): Point[][] {
         continue;
       }
 
-      if (path.length > 15) continue; // Limit depth to prevent infinite loops/performance issues
+      if (path.length > 200) continue; // Limit depth to prevent infinite loops/performance issues
 
       const neighbors = adj.get(u) || [];
       for (const v of neighbors) {
@@ -117,20 +119,24 @@ function getCentroid(nodes: Point[]): [number, number] {
   return [lat, lng];
 }
 
+interface MapControllerProps {
+  centerOn?: { lat: number; lng: number };
+  points: Point[];
+  highlightedParcelCenter?: { lat: number; lng: number };
+  highlightedParcelId?: string | null;
+  centerTrigger?: number;
+}
+
 function MapController({ 
   centerOn, 
   points,
   highlightedParcelCenter,
-  highlightedParcelId
-}: { 
-  centerOn?: { lat: number; lng: number }; 
-  points: Point[];
-  highlightedParcelCenter?: { lat: number; lng: number };
-  highlightedParcelId?: string | null;
-}) {
+  highlightedParcelId,
+  centerTrigger
+}: MapControllerProps) {
   const map = useMap();
   const [hasInitialFit, setHasInitialFit] = useState(false);
-  const lastCenteredId = useRef<string | null>(null);
+  const lastTrigger = useRef<number>(0);
 
   // Initial fit to points - only once
   useEffect(() => {
@@ -143,21 +149,15 @@ function MapController({
 
   // Manual center on user or highlighted parcel
   useEffect(() => {
-    // Only center on parcel if it's a NEW selection
-    if (highlightedParcelId && highlightedParcelId !== lastCenteredId.current && highlightedParcelCenter) {
-      map.setView([highlightedParcelCenter.lat, highlightedParcelCenter.lng], 17);
-      lastCenteredId.current = highlightedParcelId;
-    } else if (!highlightedParcelId && centerOn) {
+    // If we have a highlighted parcel and it's a new trigger or new ID
+    if (highlightedParcelId && highlightedParcelCenter) {
+      map.setView([highlightedParcelCenter.lat, highlightedParcelCenter.lng], 18);
+      lastTrigger.current = centerTrigger || 0;
+    } else if (centerOn) {
       // Manual center trigger (e.g. user location button)
       map.setView([centerOn.lat, centerOn.lng], map.getZoom() > 18 ? map.getZoom() : 18);
-      lastCenteredId.current = null;
     }
-    
-    // Reset lastCenteredId if search is cleared
-    if (!highlightedParcelId) {
-      lastCenteredId.current = null;
-    }
-  }, [centerOn, highlightedParcelCenter, highlightedParcelId, map]);
+  }, [centerOn, highlightedParcelCenter, highlightedParcelId, map, centerTrigger]);
 
   return null;
 }
@@ -188,6 +188,7 @@ export default function MapView({
   userLocation,
   showUserLocation,
   selectedPointId,
+  trackingTargetId,
   centerTrigger,
   parcels = [],
   generationFilter = 1,
@@ -196,6 +197,20 @@ export default function MapView({
   
   const cycles = findCycles(points, connections);
   const [zoom, setZoom] = useState(13);
+
+  const trackingTarget = useMemo(() => 
+    trackingTargetId ? points.find(p => p.id === trackingTargetId) : null
+  , [trackingTargetId, points]);
+
+  const trackingDistance = useMemo(() => {
+    if (userLocation && trackingTarget) {
+      const from = turf.point([userLocation.lng, userLocation.lat]);
+      const to = turf.point([trackingTarget.lng, trackingTarget.lat]);
+      return turf.distance(from, to, { units: 'meters' });
+    }
+    return null;
+  }, [userLocation, trackingTarget]);
+
   const longPressTimer = React.useRef<NodeJS.Timeout | null>(null);
 
   // Calculate generations for each cycle/parcel
@@ -224,7 +239,7 @@ export default function MapView({
 
     return polys.map(item => {
       const parcelId = item.cycle.map(p => p.id).sort().join(',');
-      const existingParcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+      const existingParcel = parcels.find(p => [...p.pointIds].sort().join(',') === parcelId);
       
       let gen = existingParcel?.generation;
       
@@ -401,7 +416,14 @@ export default function MapView({
                   >
                     <span className="text-[10px] text-slate-500 font-bold">مساحت قطعه</span>
                     <div className="flex items-baseline gap-0.5">
-                      <span className="text-sm font-mono font-bold text-slate-700">{area.toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</span>
+                      <span className="text-sm font-mono font-bold text-slate-700">
+                        {(() => {
+                          const integerPart = Math.floor(area);
+                          const decimalPart = Math.round((area - integerPart) * 100);
+                          if (decimalPart === 0) return integerPart.toLocaleString('fa-IR');
+                          return `${integerPart.toLocaleString('fa-IR')}/${decimalPart.toLocaleString('fa-IR')}`;
+                        })()}
+                      </span>
                       <span className="text-[8px] text-slate-600 font-bold">متر مربع</span>
                     </div>
                   </div>
@@ -460,15 +482,25 @@ export default function MapView({
 
   const highlightedParcelCenter = useMemo(() => {
     if (!highlightedParcelId) return null;
-    const item = cyclesWithGen.find(c => {
-      const parcelId = c.cycle.map(p => p.id).sort().join(',');
-      const parcel = parcels?.find(p => p.pointIds.sort().join(',') === parcelId);
-      return parcel?.id === highlightedParcelId;
-    });
-    if (!item) return null;
-    const centroid = turf.centroid(item.poly);
-    return { lat: centroid.geometry.coordinates[1], lng: centroid.geometry.coordinates[0] };
-  }, [highlightedParcelId, cyclesWithGen, parcels]);
+    
+    // Direct lookup by ID is more reliable and avoids mutation issues
+    const parcel = parcels.find(p => p.id === highlightedParcelId);
+    if (!parcel) return null;
+
+    const parcelPoints = parcel.pointIds
+      .map(id => points.find(p => p.id === id))
+      .filter((p): p is Point => !!p);
+
+    if (parcelPoints.length < 3) return null;
+
+    const [lat, lng] = getCentroid(parcelPoints);
+    return { lat, lng };
+  }, [highlightedParcelId, parcels, points]);
+
+  const centerOn = useMemo(() => {
+    if (centerTrigger && userLocation) return userLocation;
+    return undefined;
+  }, [centerTrigger, userLocation]);
 
   return (
     <div className="relative w-full h-full">
@@ -488,10 +520,11 @@ export default function MapView({
         
         <MapEvents onMapClick={() => onMapClick(0, 0)} onZoomEnd={setZoom} />
         <MapController 
-          centerOn={centerTrigger ? (userLocation || undefined) : undefined} 
+          centerOn={centerOn} 
           points={points}
           highlightedParcelCenter={highlightedParcelCenter || undefined}
           highlightedParcelId={highlightedParcelId}
+          centerTrigger={centerTrigger}
         />
         
         {/* Live User Location - Only shown if toggled ON */}
@@ -536,7 +569,49 @@ export default function MapView({
 
         {renderConnections()}
         {renderPolygons()}
+
+        {/* Tracking Line and Distance */}
+        {mode === 'TRACKING' && userLocation && trackingTarget && (
+          <>
+            <Polyline 
+              positions={[
+                [userLocation.lat, userLocation.lng],
+                [trackingTarget.lat, trackingTarget.lng]
+              ]}
+              pathOptions={{ color: '#f59e0b', weight: 3, dashArray: '10, 10', opacity: 0.8 }}
+            />
+          </>
+        )}
       </MapContainer>
+
+      {/* Tracking Distance Overlay */}
+      <AnimatePresence>
+        {mode === 'TRACKING' && trackingDistance !== null && (
+          <motion.div
+            initial={{ y: 50, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 50, opacity: 0 }}
+            className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[2000] bg-white/90 backdrop-blur-md px-6 py-4 rounded-[32px] border border-amber-200 shadow-2xl flex flex-col items-center min-w-[200px]"
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-2 h-2 bg-amber-500 rounded-full animate-pulse" />
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">فاصله تا هدف (میخ)</span>
+            </div>
+            <div className="flex items-baseline gap-1">
+              <span className="text-3xl font-black text-slate-900 tabular-nums">
+                {(() => {
+                  const integerPart = Math.floor(trackingDistance);
+                  const decimalPart = Math.round((trackingDistance - integerPart) * 100);
+                  if (decimalPart === 0) return integerPart.toLocaleString('fa-IR');
+                  return `${integerPart.toLocaleString('fa-IR')}/${decimalPart.toLocaleString('fa-IR')}`;
+                })()}
+              </span>
+              <span className="text-xs font-bold text-slate-600">متر</span>
+            </div>
+            <p className="text-[9px] text-slate-400 mt-2 font-medium">برای دقت بیشتر، به آرامی حرکت کنید</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
