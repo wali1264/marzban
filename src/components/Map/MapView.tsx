@@ -72,7 +72,7 @@ function findCycles(points: Point[], connections: Connection[]): Point[][] {
         continue;
       }
 
-      if (path.length > 200) continue; // Limit depth to prevent infinite loops/performance issues
+      if (path.length > 15) continue; // Limit depth to prevent infinite loops/performance issues
 
       const neighbors = adj.get(u) || [];
       for (const v of neighbors) {
@@ -239,7 +239,7 @@ export default function MapView({
 
     return polys.map(item => {
       const parcelId = item.cycle.map(p => p.id).sort().join(',');
-      const existingParcel = parcels.find(p => [...p.pointIds].sort().join(',') === parcelId);
+      const existingParcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
       
       let gen = existingParcel?.generation;
       
@@ -482,20 +482,15 @@ export default function MapView({
 
   const highlightedParcelCenter = useMemo(() => {
     if (!highlightedParcelId) return null;
-    
-    // Direct lookup by ID is more reliable and avoids mutation issues
-    const parcel = parcels.find(p => p.id === highlightedParcelId);
-    if (!parcel) return null;
-
-    const parcelPoints = parcel.pointIds
-      .map(id => points.find(p => p.id === id))
-      .filter((p): p is Point => !!p);
-
-    if (parcelPoints.length < 3) return null;
-
-    const [lat, lng] = getCentroid(parcelPoints);
-    return { lat, lng };
-  }, [highlightedParcelId, parcels, points]);
+    const item = cyclesWithGen.find(c => {
+      const parcelId = c.cycle.map(p => p.id).sort().join(',');
+      const parcel = parcels?.find(p => p.pointIds.sort().join(',') === parcelId);
+      return parcel?.id === highlightedParcelId;
+    });
+    if (!item) return null;
+    const centroid = turf.centroid(item.poly);
+    return { lat: centroid.geometry.coordinates[1], lng: centroid.geometry.coordinates[0] };
+  }, [highlightedParcelId, cyclesWithGen, parcels]);
 
   const centerOn = useMemo(() => {
     if (centerTrigger && userLocation) return userLocation;
