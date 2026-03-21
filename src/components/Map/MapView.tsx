@@ -33,8 +33,8 @@ interface MapViewProps {
   showUserLocation: boolean;
   selectedPointId: string | null;
   trackingTargetId?: string | null;
-  centerTrigger?: number; // Used to trigger centering
-  parcelCenterTrigger?: number; // Used to trigger parcel centering
+  centerTrigger?: number;
+  parcelCenterTrigger?: number;
   parcels?: Parcel[];
   generationFilter?: number;
   highlightedParcelId?: string | null;

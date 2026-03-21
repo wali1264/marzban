@@ -890,9 +890,9 @@ export default function App() {
                 exit={{ y: 20, opacity: 0 }}
                 className="bg-white/95 backdrop-blur-md border border-slate-200 rounded-3xl shadow-2xl w-full max-w-md overflow-hidden max-h-60 overflow-y-auto"
               >
-                {parcels.filter(p => p.ownerName?.toLowerCase().includes(searchQuery.toLowerCase())).length > 0 ? (
+                {parcels.filter(p => (p.ownerName || '').toLowerCase().includes(searchQuery.toLowerCase())).length > 0 ? (
                   parcels
-                    .filter(p => p.ownerName?.toLowerCase().includes(searchQuery.toLowerCase()))
+                    .filter(p => (p.ownerName || '').toLowerCase().includes(searchQuery.toLowerCase()))
                     .map(parcel => (
                       <button
                         key={parcel.id}
