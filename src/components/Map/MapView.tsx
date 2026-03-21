@@ -90,26 +90,12 @@ function findCycles(points: Point[], connections: Connection[]): Point[][] {
   );
 }
 
-// Precise area calculation in square meters
+// Precise area calculation in square meters using Turf (WGS84 Ellipsoid)
 function calculatePolygonArea(nodes: Point[]): number {
   if (nodes.length < 3) return 0;
-  
-  const radius = 6378137; // Earth radius
-  let area = 0;
-  
-  for (let i = 0; i < nodes.length; i++) {
-    const p1 = nodes[i];
-    const p2 = nodes[(i + 1) % nodes.length];
-    
-    const lat1 = p1.lat * Math.PI / 180;
-    const lon1 = p1.lng * Math.PI / 180;
-    const lat2 = p2.lat * Math.PI / 180;
-    const lon2 = p2.lng * Math.PI / 180;
-    
-    area += (lon2 - lon1) * (2 + Math.sin(lat1) + Math.sin(lat2));
-  }
-  
-  return Math.abs(area * radius * radius / 2.0);
+  const coords = [...nodes.map(p => [p.lng, p.lat]), [nodes[0].lng, nodes[0].lat]];
+  const poly = turf.polygon([coords as any]);
+  return turf.area(poly);
 }
 
 // Calculate geometric center of points

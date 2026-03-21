@@ -62,8 +62,8 @@ export default function App() {
   const [mode, setMode] = useState<AppMode>('VIEW');
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number; accuracy: number }>();
   const [rawLocation, setRawLocation] = useState<{ lat: number; lng: number; accuracy: number }>();
-  const locationBuffer = useRef<{ lat: number; lng: number }[]>([]);
-  const MAX_BUFFER_SIZE = 5; // Average over last 5 points for smoothing
+  const locationBuffer = useRef<{ lat: number; lng: number; accuracy: number }[]>([]);
+  const MAX_BUFFER_SIZE = 10; // Increased buffer for better weighted smoothing
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
   const [trackingTargetId, setTrackingTargetId] = useState<string | null>(null);
   const [showRecorder, setShowRecorder] = useState(false);
@@ -250,22 +250,37 @@ export default function App() {
       return;
     }
 
-    // 1. Smoothing (Moving Average)
-    locationBuffer.current.push({ lat: rawLocation.lat, lng: rawLocation.lng });
+    // 1. Weighted Smoothing (Inverse Variance Weighting)
+    locationBuffer.current.push({ 
+      lat: rawLocation.lat, 
+      lng: rawLocation.lng, 
+      accuracy: rawLocation.accuracy 
+    });
     if (locationBuffer.current.length > MAX_BUFFER_SIZE) {
       locationBuffer.current.shift();
     }
 
-    const avgLat = locationBuffer.current.reduce((sum, p) => sum + p.lat, 0) / locationBuffer.current.length;
-    const avgLng = locationBuffer.current.reduce((sum, p) => sum + p.lng, 0) / locationBuffer.current.length;
+    let totalWeight = 0;
+    let weightedLat = 0;
+    let weightedLng = 0;
+    let minAccuracy = rawLocation.accuracy;
+
+    locationBuffer.current.forEach(p => {
+      // Weight is 1/accuracy^2. Higher accuracy (lower number) gets much more weight.
+      const weight = 1 / Math.pow(Math.max(0.1, p.accuracy), 2);
+      totalWeight += weight;
+      weightedLat += p.lat * weight;
+      weightedLng += p.lng * weight;
+      if (p.accuracy < minAccuracy) minAccuracy = p.accuracy;
+    });
 
     // 2. Apply Manual Offset
     const offset = gnssConfig.locationOffset || { lat: 0, lng: 0 };
     
     setUserLocation({
-      lat: avgLat + offset.lat,
-      lng: avgLng + offset.lng,
-      accuracy: rawLocation.accuracy
+      lat: (weightedLat / totalWeight) + offset.lat,
+      lng: (weightedLng / totalWeight) + offset.lng,
+      accuracy: minAccuracy
     });
   }, [rawLocation, gnssConfig.locationOffset]);
 

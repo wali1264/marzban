@@ -11,8 +11,7 @@ import {
   RefreshCw, 
   Info,
   Smartphone,
-  Cpu,
-  Target
+  Cpu
 } from 'lucide-react';
 import { GNSSConfig, GNSSStatus } from '../../types';
 import { cn } from '../../utils';
@@ -115,75 +114,6 @@ export default function GNSSSettings({ config, status, onSave, onConnect, onRese
                 <Bluetooth className={cn("w-8 h-8", localConfig.source === 'EXTERNAL' ? "text-emerald-400" : "text-slate-500")} />
                 <span className={cn("font-bold text-sm", localConfig.source === 'EXTERNAL' ? "text-white" : "text-slate-400")}>گیرنده GNSS خارجی</span>
               </button>
-            </div>
-          </section>
-
-          {/* Systematic Bias Correction */}
-          <section className="space-y-4">
-            <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
-              <Target className="w-4 h-4" />
-              تصحیح خطای سیستماتیک (Bias Correction)
-            </h3>
-            <div className="bg-slate-800/50 p-6 rounded-3xl border border-white/5 space-y-4">
-              <p className="text-[10px] text-slate-400 leading-relaxed font-bold">
-                اگر دستگاه شما به طور مداوم مختصات را با یک جابجایی ثابت (مثلاً ۱۰ متر به شرق) نشان می‌دهد، از این بخش برای کالیبره کردن استفاده کنید.
-              </p>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-[9px] text-slate-500 font-black px-1">آفست عرض جغرافیایی (Lat Offset)</label>
-                  <input 
-                    type="number" 
-                    step="0.000001"
-                    value={localConfig.locationOffset?.lat || 0}
-                    onChange={(e) => setLocalConfig({ 
-                      ...localConfig, 
-                      locationOffset: { 
-                        lat: parseFloat(e.target.value), 
-                        lng: localConfig.locationOffset?.lng || 0 
-                      } 
-                    })}
-                    className="w-full bg-slate-900 border border-white/10 rounded-2xl px-4 py-3 text-sm font-mono focus:border-indigo-500 outline-none transition-all"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[9px] text-slate-500 font-black px-1">آفست طول جغرافیایی (Lng Offset)</label>
-                  <input 
-                    type="number" 
-                    step="0.000001"
-                    value={localConfig.locationOffset?.lng || 0}
-                    onChange={(e) => setLocalConfig({ 
-                      ...localConfig, 
-                      locationOffset: { 
-                        lat: localConfig.locationOffset?.lat || 0, 
-                        lng: parseFloat(e.target.value) 
-                      } 
-                    })}
-                    className="w-full bg-slate-900 border border-white/10 rounded-2xl px-4 py-3 text-sm font-mono focus:border-indigo-500 outline-none transition-all"
-                  />
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <button 
-                  onClick={() => {
-                    // Quick 10m North/East correction helper
-                    const lat10m = 0.00009; // Approx 10m in Lat
-                    const lng10m = 0.00011; // Approx 10m in Lng
-                    setLocalConfig({
-                      ...localConfig,
-                      locationOffset: { lat: -lat10m, lng: -lng10m }
-                    });
-                  }}
-                  className="flex-1 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-[10px] font-black transition-all"
-                >
-                  تصحیح خودکار ۱۰ متر (شمال‌شرق)
-                </button>
-                <button 
-                  onClick={() => setLocalConfig({ ...localConfig, locationOffset: { lat: 0, lng: 0 } })}
-                  className="px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-xl text-[10px] font-black transition-all"
-                >
-                  ریست
-                </button>
-              </div>
             </div>
           </section>
 

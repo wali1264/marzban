@@ -31,17 +31,38 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
   const [readings, setReadings] = useState<{ lat: number; lng: number; accuracy: number; altitude?: number | null }[]>([]);
   const [currentReading, setCurrentReading] = useState<{ lat: number; lng: number; accuracy: number; altitude?: number | null } | null>(null);
   const [stability, setStability] = useState(100);
-  const [spatialConfidence, setSpatialConfidence] = useState(100);
-  const [settleProgress, setSettleProgress] = useState(0);
   const [isMoving, setIsMoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const watchIdRef = useRef<number | null>(null);
+  const isMovingRef = useRef(false);
   const kalmanLat = useRef(new KalmanFilter({ R: 0.1, Q: 1 })); // Initial conservative values
   const kalmanLng = useRef(new KalmanFilter({ R: 0.1, Q: 1 }));
   const lastValidReading = useRef<{ lat: number, lng: number } | null>(null);
   const motionRef = useRef<{ x: number, y: number, z: number }[]>([]);
+
+  const handleMotion = useCallback((event: DeviceMotionEvent) => {
+    const acc = event.accelerationIncludingGravity;
+    if (acc && acc.x !== null && acc.y !== null && acc.z !== null) {
+      motionRef.current.push({ x: acc.x, y: acc.y, z: acc.z });
+      if (motionRef.current.length > 20) motionRef.current.shift();
+
+      // Calculate stability (variance of acceleration)
+      const variance = motionRef.current.reduce((acc, val, i, arr) => {
+        if (i === 0) return 0;
+        const prev = arr[i-1];
+        return acc + Math.abs(val.x - prev.x) + Math.abs(val.y - prev.y) + Math.abs(val.z - prev.z);
+      }, 0) / motionRef.current.length;
+
+      // Expert Threshold: 0.2 is the noise floor for a high-end smartphone on a table
+      const stabilityVal = Math.max(0, Math.min(100, 100 - (variance * 50)));
+      setStability(stabilityVal);
+      const moving = variance > 0.25;
+      setIsMoving(moving); // For UI
+      isMovingRef.current = moving; // For logic
+    }
+  }, []);
 
   const startObservation = useCallback(() => {
     setIsProcessing(true);
@@ -77,7 +98,7 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
           let targetLat = position.coords.latitude;
           let targetLng = position.coords.longitude;
 
-          if (!isMoving && lastValidReading.current) {
+          if (!isMovingRef.current && lastValidReading.current) {
             // Calculate distance from last reading
             const dist = Math.sqrt(
               Math.pow(targetLat - lastValidReading.current.lat, 2) + 
@@ -88,16 +109,18 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
             // it's almost certainly GNSS Wander. We damp it heavily.
             if (dist < 0.0001) {
               // Increase R dynamically: Trust the sensor even LESS because we know we are stationary
-              kalmanLat.current.R = 10.0; 
-              kalmanLng.current.R = 10.0;
+              (kalmanLat.current as any).R = 10.0; 
+              (kalmanLng.current as any).R = 10.0;
             } else {
               // Large jump while stationary? Likely a massive Multipath error. Reject it.
               return;
             }
           } else {
-            // We are moving: Trust the sensor more (Lower R)
-            kalmanLat.current.R = 0.1;
-            kalmanLng.current.R = 0.1;
+            // We are moving or no last reading: Trust the sensor more (Lower R)
+            // Use reported accuracy to tune R
+            const dynamicR = Math.max(0.01, position.coords.accuracy / 10);
+            (kalmanLat.current as any).R = dynamicR;
+            (kalmanLng.current as any).R = dynamicR;
           }
 
           // 3. Apply Kalman Filter
@@ -124,26 +147,6 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
       );
 
       // Start Motion Detection (Sensor Fusion)
-      const handleMotion = (event: DeviceMotionEvent) => {
-        const acc = event.accelerationIncludingGravity;
-        if (acc && acc.x !== null && acc.y !== null && acc.z !== null) {
-          motionRef.current.push({ x: acc.x, y: acc.y, z: acc.z });
-          if (motionRef.current.length > 20) motionRef.current.shift();
-
-          // Calculate stability (variance of acceleration)
-          const variance = motionRef.current.reduce((acc, val, i, arr) => {
-            if (i === 0) return 0;
-            const prev = arr[i-1];
-            return acc + Math.abs(val.x - prev.x) + Math.abs(val.y - prev.y) + Math.abs(val.z - prev.z);
-          }, 0) / motionRef.current.length;
-
-          // Expert Threshold: 0.2 is the noise floor for a high-end smartphone on a table
-          const stabilityVal = Math.max(0, Math.min(100, 100 - (variance * 50)));
-          setStability(stabilityVal);
-          setIsMoving(variance > 0.25); // Strict threshold for "Stationary"
-        }
-      };
-
       if (typeof DeviceMotionEvent !== 'undefined' && typeof (DeviceMotionEvent as any).requestPermission === 'function') {
         (DeviceMotionEvent as any).requestPermission()
           .then((permissionState: string) => {
@@ -161,28 +164,40 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
     timerRef.current = setInterval(() => {
       setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
     }, 1000);
-  }, [gnssConfig.source]);
+  }, [gnssConfig.source, handleMotion]);
 
   // Collect external GNSS data if active
   useEffect(() => {
     if (isProcessing && gnssConfig.source === 'EXTERNAL' && gnssStatus.connected) {
+      // For external GNSS, we also apply Kalman if it's not already FIXED
+      let targetLat = gnssStatus.lat;
+      let targetLng = gnssStatus.lng;
+
+      if (gnssStatus.fixType !== 'FIXED') {
+        const dynamicR = Math.max(0.01, gnssStatus.accuracy / 10);
+        (kalmanLat.current as any).R = dynamicR;
+        (kalmanLng.current as any).R = dynamicR;
+        targetLat = kalmanLat.current.filter(targetLat);
+        targetLng = kalmanLng.current.filter(targetLng);
+      }
+
       const newReading = {
-        lat: gnssStatus.lat,
-        lng: gnssStatus.lng,
+        lat: targetLat,
+        lng: targetLng,
         accuracy: gnssStatus.accuracy,
         altitude: gnssStatus.altitude
       };
       setCurrentReading(newReading);
       setReadings(prev => [...prev, newReading]);
     }
-  }, [isProcessing, gnssConfig.source, gnssStatus.lat, gnssStatus.lng, gnssStatus.accuracy, gnssStatus.connected]);
+  }, [isProcessing, gnssConfig.source, gnssStatus.lat, gnssStatus.lng, gnssStatus.accuracy, gnssStatus.connected, gnssStatus.fixType, gnssStatus.altitude]);
 
-  const stopObservation = () => {
+  const stopObservation = useCallback(() => {
     setIsProcessing(false);
     if (timerRef.current) clearInterval(timerRef.current);
     if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
-    window.removeEventListener('devicemotion', () => {});
-  };
+    window.removeEventListener('devicemotion', handleMotion);
+  }, [handleMotion]);
 
   useEffect(() => {
     startObservation();
@@ -192,52 +207,30 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
   const getWeightedAverage = () => {
     if (readings.length === 0) return currentReading;
     
-    // 1. Spatial Density Clustering (The "5-Meter Rule")
-    // Instead of simple mean, we find the most dense cluster within a 5m radius.
-    // This is the "Expert Engineer" approach to handle Multipath in semi-open spaces.
-    
-    const R_EARTH = 6371000; // Earth's radius in meters
-    
-    const getDistance = (p1: { lat: number, lng: number }, p2: { lat: number, lng: number }) => {
-      const dLat = (p2.lat - p1.lat) * Math.PI / 180;
-      const dLng = (p2.lng - p1.lng) * Math.PI / 180;
-      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                Math.cos(p1.lat * Math.PI / 180) * Math.cos(p2.lat * Math.PI / 180) *
-                Math.sin(dLng / 2) * Math.sin(dLng / 2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      return R_EARTH * c;
+    // 1. Outlier Rejection (Sigma Clipping using Median)
+    const median = (arr: number[]) => {
+      const sorted = [...arr].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
     };
 
-    // Find the point with the most neighbors within 5 meters
-    let bestCluster: typeof readings = [];
-    let maxNeighbors = -1;
+    const lats = readings.map(r => r.lat);
+    const lngs = readings.map(r => r.lng);
+    
+    const medLat = median(lats);
+    const medLng = median(lngs);
+    
+    const stdLat = Math.sqrt(lats.map(x => Math.pow(x - medLat, 2)).reduce((a, b) => a + b, 0) / lats.length);
+    const stdLng = Math.sqrt(lngs.map(x => Math.pow(x - medLng, 2)).reduce((a, b) => a + b, 0) / lngs.length);
 
-    // We only look at the last 50 readings to keep it responsive
-    const recentReadings = readings.slice(-50);
-
-    recentReadings.forEach((p1, i) => {
-      const neighbors = recentReadings.filter(p2 => getDistance(p1, p2) <= 5);
-      if (neighbors.length > maxNeighbors) {
-        maxNeighbors = neighbors.length;
-        bestCluster = neighbors;
-      }
+    // Filter readings within 2 sigma of median
+    const filteredReadings = readings.filter(r => {
+      const distLat = Math.abs(r.lat - medLat);
+      const distLng = Math.abs(r.lng - medLng);
+      return distLat <= 2 * stdLat && distLng <= 2 * stdLng;
     });
 
-    // If we couldn't find a cluster (unlikely), fall back to all readings
-    const targetReadings = bestCluster.length > 0 ? bestCluster : readings;
-
-    // Calculate Spatial Confidence (Percentage of points within 5m cluster)
-    if (recentReadings.length > 0) {
-      const confidence = (bestCluster.length / recentReadings.length) * 100;
-      setSpatialConfidence(confidence);
-      
-      // Auto-Settling Logic: Progress increases only when stable and confident
-      if (confidence > 80 && stability > 90 && !isMoving) {
-        setSettleProgress(prev => Math.min(100, prev + 2)); // Takes ~50 stable readings (~10-20s)
-      } else if (isMoving) {
-        setSettleProgress(prev => Math.max(0, prev - 5)); // Rapidly reset on movement
-      }
-    }
+    const targetReadings = filteredReadings.length > 0 ? filteredReadings : readings;
 
     // 2. Weighted average based on accuracy (Inverse Variance Weighting)
     let totalWeight = 0;
@@ -246,17 +239,15 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
     let minAccuracy = Infinity;
 
     targetReadings.forEach(r => {
-      // Weight is inversely proportional to accuracy squared
-      // We also give more weight to points in the dense cluster
-      const weight = 1 / Math.pow(r.accuracy, 2); 
+      // Avoid division by zero, use a small epsilon
+      const weight = 1 / Math.pow(Math.max(0.01, r.accuracy), 2); 
       totalWeight += weight;
       weightedLat += r.lat * weight;
       weightedLng += r.lng * weight;
       if (r.accuracy < minAccuracy) minAccuracy = r.accuracy;
     });
 
-    // 3. Apply Systematic Bias Correction (The 10m East/North Offset)
-    // The user mentioned a consistent 10m offset. We apply the calibration offset here.
+    // 3. Apply Manual Offset from Calibration
     const offset = gnssConfig.locationOffset || { lat: 0, lng: 0 };
 
     return {
@@ -288,9 +279,10 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
   };
 
   const accuracyPercentage = bestReading ? calculateConfidence(bestReading.accuracy) : 0;
-  const surveyProgress = Math.min(100, (readings.length / 30) * 100); // 30 samples for full survey grade
+  const surveyProgress = Math.min(100, (readings.length / 60) * 100); // 60 samples for full survey grade
   const isStable = readings.length > 10 && accuracyPercentage > 80;
   const isPoorSignal = bestReading && bestReading.accuracy > 15;
+  const isExternalRtk = gnssConfig.source === 'EXTERNAL' && gnssStatus.fixType === 'FIXED';
 
   return (
     <motion.div 
@@ -345,13 +337,9 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
           <p className="text-slate-500 text-xs font-bold">
             {isMoving 
               ? "هشدار: لرزش دستگاه زیاد است. گوشی را ثابت نگه دارید." 
-              : spatialConfidence < 50
-              ? "هشدار: سیگنال پراکنده است (Multipath). لطفاً کمی جابجا شوید."
               : isPoorSignal 
               ? "هشدار: سیگنال ضعیف است. لطفاً در فضای باز قرار بگیرید." 
-              : readings.length < 10 
-              ? "در حال جمع‌آوری خوشه‌های سیگنال..."
-              : "خوشه‌بندی ۵ متری فعال - در حال فیلتر نقاط پراکنده..."}
+              : "در حال آنالیز لایه‌های سیگنال و تصحیح خطا..."}
           </p>
         </div>
 
@@ -360,42 +348,14 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
             <Activity className="w-24 h-24 text-emerald-500" />
           </div>
 
-          {/* Signal Quality Visualizer */}
-          <div className="mb-8 space-y-3">
-            <div className="flex justify-between items-end">
-              <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">وضعیت تثبیت نقطه (Settling)</span>
-              <span className={cn(
-                "text-xs font-mono font-bold",
-                settleProgress === 100 ? "text-emerald-400" : "text-blue-400"
-              )}>
-                {settleProgress === 100 ? "تثبیت نهایی (FIXED)" : `${settleProgress}%`}
-              </span>
-            </div>
-            <div className="h-2 bg-slate-800 rounded-full overflow-hidden border border-white/5">
-              <motion.div 
-                initial={{ width: 0 }}
-                animate={{ width: `${settleProgress}%` }}
-                className={cn(
-                  "h-full transition-all duration-500",
-                  settleProgress === 100 ? "bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.4)]" : "bg-blue-500"
-                )}
-              />
-            </div>
-            <div className="flex justify-between text-[8px] font-black text-slate-600 uppercase">
-              <span>جستجو</span>
-              <span>خوشه‌بندی</span>
-              <span>تثبیت نهایی</span>
-            </div>
-          </div>
-
           <div className="grid grid-cols-4 gap-2 mb-8 relative z-10">
             <div className="text-center border-r border-white/5">
               <span className="text-[8px] text-slate-500 font-black block mb-1">SATELLITES</span>
               <span className="font-mono text-lg text-emerald-400">{satellites}</span>
             </div>
             <div className="text-center border-r border-white/5">
-              <span className="text-[8px] text-slate-500 font-black block mb-1">CONFIDENCE</span>
-              <span className={cn("font-mono text-lg", spatialConfidence > 70 ? "text-blue-400" : "text-amber-400")}>%{spatialConfidence.toFixed(0)}</span>
+              <span className="text-[8px] text-slate-500 font-black block mb-1">HDOP</span>
+              <span className="font-mono text-lg text-blue-400">{hdop}</span>
             </div>
             <div className="text-center border-r border-white/5">
               <span className="text-[8px] text-slate-500 font-black block mb-1">SAMPLES</span>
@@ -454,12 +414,19 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
           </div>
           <div className="h-1 bg-slate-900 rounded-full overflow-hidden">
             <motion.div 
-              className="h-full bg-indigo-500"
+              className={cn("h-full transition-colors duration-500", isExternalRtk ? "bg-emerald-500" : "bg-indigo-500")}
               initial={{ width: 0 }}
               animate={{ width: `${surveyProgress}%` }}
             />
           </div>
         </div>
+
+        {gnssConfig.source === 'EXTERNAL' && gnssStatus.connected && gnssStatus.fixType !== 'FIXED' && (
+          <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 p-3 rounded-2xl flex items-center gap-3 text-[10px] font-bold">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            دستگاه GNSS متصل است اما وضعیت RTK FIXED نیست. دقت ممکن است در حد سانتی‌متر نباشد.
+          </div>
+        )}
 
         {error && (
           <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 p-4 rounded-3xl flex items-center gap-3 text-xs font-bold">
@@ -516,13 +483,7 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
               </div>
             )}
             <button 
-              onClick={() => onConfirm({
-                ...bestReading,
-                satellites,
-                confidence: spatialConfidence,
-                stability,
-                isSettled: settleProgress === 100
-              })}
+              onClick={() => onConfirm(bestReading)}
               disabled={isPoorSignal && readings.length < 5}
               className={cn(
                 "w-full flex items-center justify-center gap-3 py-6 text-white rounded-[32px] font-black text-lg shadow-2xl transition-all active:scale-95 border-t border-white/20",

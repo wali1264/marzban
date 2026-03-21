@@ -52,6 +52,16 @@ export function parseGPGGA(sentence: string): Partial<GNSSStatus> | null {
   // Altitude
   const altitude = parseFloat(parts[9]) || 0;
 
+  // Accuracy estimation based on Fix Quality and HDOP
+  let accuracy = hdop * 2.5; // Default rough estimation
+  if (fixType === 'FIXED') {
+    accuracy = 0.02; // RTK Fixed is typically 1-2cm
+  } else if (fixType === 'FLOAT') {
+    accuracy = 0.5; // RTK Float is typically sub-meter
+  } else if (fixType === 'DGPS') {
+    accuracy = Math.max(0.8, hdop * 1.2);
+  }
+
   return {
     lat,
     lng,
@@ -59,7 +69,7 @@ export function parseGPGGA(sentence: string): Partial<GNSSStatus> | null {
     satellites,
     hdop,
     altitude,
-    accuracy: hdop * 2.5, // Rough estimation of accuracy in meters
+    accuracy,
     timestamp: Date.now()
   };
 }
