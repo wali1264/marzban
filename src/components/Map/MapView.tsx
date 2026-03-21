@@ -34,6 +34,7 @@ interface MapViewProps {
   selectedPointId: string | null;
   trackingTargetId?: string | null;
   centerTrigger?: number; // Used to trigger centering
+  parcelCenterTrigger?: number; // Used to trigger parcel centering
   parcels?: Parcel[];
   generationFilter?: number;
   highlightedParcelId?: string | null;
@@ -125,6 +126,7 @@ interface MapControllerProps {
   highlightedParcelCenter?: { lat: number; lng: number };
   highlightedParcelId?: string | null;
   centerTrigger?: number;
+  parcelCenterTrigger?: number;
 }
 
 function MapController({ 
@@ -132,11 +134,13 @@ function MapController({
   points,
   highlightedParcelCenter,
   highlightedParcelId,
-  centerTrigger
+  centerTrigger,
+  parcelCenterTrigger
 }: MapControllerProps) {
   const map = useMap();
   const [hasInitialFit, setHasInitialFit] = useState(false);
   const lastTrigger = useRef<number>(0);
+  const lastParcelTrigger = useRef<number>(0);
 
   // Initial fit to points - only once
   useEffect(() => {
@@ -150,14 +154,15 @@ function MapController({
   // Manual center on user or highlighted parcel
   useEffect(() => {
     // If we have a highlighted parcel and it's a new trigger or new ID
-    if (highlightedParcelId && highlightedParcelCenter) {
+    if (highlightedParcelId && highlightedParcelCenter && parcelCenterTrigger !== lastParcelTrigger.current) {
       map.setView([highlightedParcelCenter.lat, highlightedParcelCenter.lng], 18);
-      lastTrigger.current = centerTrigger || 0;
-    } else if (centerOn) {
+      lastParcelTrigger.current = parcelCenterTrigger || 0;
+    } else if (centerOn && centerTrigger !== lastTrigger.current) {
       // Manual center trigger (e.g. user location button)
       map.setView([centerOn.lat, centerOn.lng], map.getZoom() > 18 ? map.getZoom() : 18);
+      lastTrigger.current = centerTrigger || 0;
     }
-  }, [centerOn, highlightedParcelCenter, highlightedParcelId, map, centerTrigger]);
+  }, [centerOn, highlightedParcelCenter, highlightedParcelId, map, centerTrigger, parcelCenterTrigger]);
 
   return null;
 }
@@ -190,6 +195,7 @@ export default function MapView({
   selectedPointId,
   trackingTargetId,
   centerTrigger,
+  parcelCenterTrigger,
   parcels = [],
   generationFilter = 1,
   highlightedParcelId = null
@@ -520,6 +526,7 @@ export default function MapView({
           highlightedParcelCenter={highlightedParcelCenter || undefined}
           highlightedParcelId={highlightedParcelId}
           centerTrigger={centerTrigger}
+          parcelCenterTrigger={parcelCenterTrigger}
         />
         
         {/* Live User Location - Only shown if toggled ON */}

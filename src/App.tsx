@@ -61,6 +61,7 @@ export default function App() {
   const [showRecorder, setShowRecorder] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [centerTrigger, setCenterTrigger] = useState(0);
+  const [parcelCenterTrigger, setParcelCenterTrigger] = useState(0);
   const [showUserLocation, setShowUserLocation] = useState(false);
 
   const [parcels, setParcels] = useState<Parcel[]>([]);
@@ -799,6 +800,7 @@ export default function App() {
           selectedPointId={selectedPointId}
           trackingTargetId={trackingTargetId}
           centerTrigger={centerTrigger}
+          parcelCenterTrigger={parcelCenterTrigger}
           parcels={parcels}
           generationFilter={generationFilter}
           highlightedParcelId={highlightedParcelId}
@@ -899,7 +901,7 @@ export default function App() {
                             setSelectedParcelForCertificate(parcel);
                           } else {
                             setHighlightedParcelId(parcel.id);
-                            setCenterTrigger(prev => prev + 1);
+                            setParcelCenterTrigger(prev => prev + 1);
                             setIsSearchActive(false);
                             setSearchQuery('');
                           }
