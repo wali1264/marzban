@@ -31,6 +31,8 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
   const [readings, setReadings] = useState<{ lat: number; lng: number; accuracy: number; altitude?: number | null }[]>([]);
   const [currentReading, setCurrentReading] = useState<{ lat: number; lng: number; accuracy: number; altitude?: number | null } | null>(null);
   const [stability, setStability] = useState(100);
+  const [spatialConfidence, setSpatialConfidence] = useState(100);
+  const [settleProgress, setSettleProgress] = useState(0);
   const [isMoving, setIsMoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
@@ -190,32 +192,62 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
   const getWeightedAverage = () => {
     if (readings.length === 0) return currentReading;
     
-    // 1. Outlier Rejection (Sigma Clipping)
-    // Calculate mean and std dev
-    const lats = readings.map(r => r.lat);
-    const lngs = readings.map(r => r.lng);
-    const meanLat = lats.reduce((a, b) => a + b, 0) / lats.length;
-    const meanLng = lngs.reduce((a, b) => a + b, 0) / lngs.length;
+    // 1. Spatial Density Clustering (The "5-Meter Rule")
+    // Instead of simple mean, we find the most dense cluster within a 5m radius.
+    // This is the "Expert Engineer" approach to handle Multipath in semi-open spaces.
     
-    const stdLat = Math.sqrt(lats.map(x => Math.pow(x - meanLat, 2)).reduce((a, b) => a + b, 0) / lats.length);
-    const stdLng = Math.sqrt(lngs.map(x => Math.pow(x - meanLng, 2)).reduce((a, b) => a + b, 0) / lngs.length);
+    const R_EARTH = 6371000; // Earth's radius in meters
+    
+    const getDistance = (p1: { lat: number, lng: number }, p2: { lat: number, lng: number }) => {
+      const dLat = (p2.lat - p1.lat) * Math.PI / 180;
+      const dLng = (p2.lng - p1.lng) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(p1.lat * Math.PI / 180) * Math.cos(p2.lat * Math.PI / 180) *
+                Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R_EARTH * c;
+    };
 
-    // Filter readings within 2 sigma
-    const filteredReadings = readings.filter(r => {
-      const distLat = Math.abs(r.lat - meanLat);
-      const distLng = Math.abs(r.lng - meanLng);
-      return distLat <= 2 * stdLat && distLng <= 2 * stdLng;
+    // Find the point with the most neighbors within 5 meters
+    let bestCluster: typeof readings = [];
+    let maxNeighbors = -1;
+
+    // We only look at the last 50 readings to keep it responsive
+    const recentReadings = readings.slice(-50);
+
+    recentReadings.forEach((p1, i) => {
+      const neighbors = recentReadings.filter(p2 => getDistance(p1, p2) <= 5);
+      if (neighbors.length > maxNeighbors) {
+        maxNeighbors = neighbors.length;
+        bestCluster = neighbors;
+      }
     });
 
-    const targetReadings = filteredReadings.length > 0 ? filteredReadings : readings;
+    // If we couldn't find a cluster (unlikely), fall back to all readings
+    const targetReadings = bestCluster.length > 0 ? bestCluster : readings;
 
-    // 2. Weighted average based on accuracy
+    // Calculate Spatial Confidence (Percentage of points within 5m cluster)
+    if (recentReadings.length > 0) {
+      const confidence = (bestCluster.length / recentReadings.length) * 100;
+      setSpatialConfidence(confidence);
+      
+      // Auto-Settling Logic: Progress increases only when stable and confident
+      if (confidence > 80 && stability > 90 && !isMoving) {
+        setSettleProgress(prev => Math.min(100, prev + 2)); // Takes ~50 stable readings (~10-20s)
+      } else if (isMoving) {
+        setSettleProgress(prev => Math.max(0, prev - 5)); // Rapidly reset on movement
+      }
+    }
+
+    // 2. Weighted average based on accuracy (Inverse Variance Weighting)
     let totalWeight = 0;
     let weightedLat = 0;
     let weightedLng = 0;
     let minAccuracy = Infinity;
 
     targetReadings.forEach(r => {
+      // Weight is inversely proportional to accuracy squared
+      // We also give more weight to points in the dense cluster
       const weight = 1 / Math.pow(r.accuracy, 2); 
       totalWeight += weight;
       weightedLat += r.lat * weight;
@@ -223,7 +255,8 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
       if (r.accuracy < minAccuracy) minAccuracy = r.accuracy;
     });
 
-    // 3. Apply Manual Offset from Calibration
+    // 3. Apply Systematic Bias Correction (The 10m East/North Offset)
+    // The user mentioned a consistent 10m offset. We apply the calibration offset here.
     const offset = gnssConfig.locationOffset || { lat: 0, lng: 0 };
 
     return {
@@ -312,9 +345,13 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
           <p className="text-slate-500 text-xs font-bold">
             {isMoving 
               ? "هشدار: لرزش دستگاه زیاد است. گوشی را ثابت نگه دارید." 
+              : spatialConfidence < 50
+              ? "هشدار: سیگنال پراکنده است (Multipath). لطفاً کمی جابجا شوید."
               : isPoorSignal 
               ? "هشدار: سیگنال ضعیف است. لطفاً در فضای باز قرار بگیرید." 
-              : "در حال آنالیز لایه‌های سیگنال و تصحیح خطا..."}
+              : readings.length < 10 
+              ? "در حال جمع‌آوری خوشه‌های سیگنال..."
+              : "خوشه‌بندی ۵ متری فعال - در حال فیلتر نقاط پراکنده..."}
           </p>
         </div>
 
@@ -323,14 +360,42 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
             <Activity className="w-24 h-24 text-emerald-500" />
           </div>
 
+          {/* Signal Quality Visualizer */}
+          <div className="mb-8 space-y-3">
+            <div className="flex justify-between items-end">
+              <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">وضعیت تثبیت نقطه (Settling)</span>
+              <span className={cn(
+                "text-xs font-mono font-bold",
+                settleProgress === 100 ? "text-emerald-400" : "text-blue-400"
+              )}>
+                {settleProgress === 100 ? "تثبیت نهایی (FIXED)" : `${settleProgress}%`}
+              </span>
+            </div>
+            <div className="h-2 bg-slate-800 rounded-full overflow-hidden border border-white/5">
+              <motion.div 
+                initial={{ width: 0 }}
+                animate={{ width: `${settleProgress}%` }}
+                className={cn(
+                  "h-full transition-all duration-500",
+                  settleProgress === 100 ? "bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.4)]" : "bg-blue-500"
+                )}
+              />
+            </div>
+            <div className="flex justify-between text-[8px] font-black text-slate-600 uppercase">
+              <span>جستجو</span>
+              <span>خوشه‌بندی</span>
+              <span>تثبیت نهایی</span>
+            </div>
+          </div>
+
           <div className="grid grid-cols-4 gap-2 mb-8 relative z-10">
             <div className="text-center border-r border-white/5">
               <span className="text-[8px] text-slate-500 font-black block mb-1">SATELLITES</span>
               <span className="font-mono text-lg text-emerald-400">{satellites}</span>
             </div>
             <div className="text-center border-r border-white/5">
-              <span className="text-[8px] text-slate-500 font-black block mb-1">HDOP</span>
-              <span className="font-mono text-lg text-blue-400">{hdop}</span>
+              <span className="text-[8px] text-slate-500 font-black block mb-1">CONFIDENCE</span>
+              <span className={cn("font-mono text-lg", spatialConfidence > 70 ? "text-blue-400" : "text-amber-400")}>%{spatialConfidence.toFixed(0)}</span>
             </div>
             <div className="text-center border-r border-white/5">
               <span className="text-[8px] text-slate-500 font-black block mb-1">SAMPLES</span>
@@ -451,7 +516,13 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
               </div>
             )}
             <button 
-              onClick={() => onConfirm(bestReading)}
+              onClick={() => onConfirm({
+                ...bestReading,
+                satellites,
+                confidence: spatialConfidence,
+                stability,
+                isSettled: settleProgress === 100
+              })}
               disabled={isPoorSignal && readings.length < 5}
               className={cn(
                 "w-full flex items-center justify-center gap-3 py-6 text-white rounded-[32px] font-black text-lg shadow-2xl transition-all active:scale-95 border-t border-white/20",
