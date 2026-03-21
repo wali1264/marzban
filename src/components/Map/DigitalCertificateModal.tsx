@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Printer, MapPin, Scale, Layers, User, CheckCircle2, Hash, ShieldCheck, Binary, Table, Ruler, Compass, Fingerprint, Info } from 'lucide-react';
 import { Parcel, Point } from '../../types';
@@ -18,6 +18,33 @@ const DigitalCertificateModal: React.FC<DigitalCertificateModalProps> = ({
   onClose
 }) => {
   const printRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    const updateScale = () => {
+      if (containerRef.current) {
+        const containerWidth = containerRef.current.clientWidth - 48;
+        const containerHeight = containerRef.current.clientHeight - 48;
+        
+        // A4 dimensions in pixels (approx 96 DPI)
+        const a4Width = 794;
+        const a4Height = 1123;
+        
+        const scaleX = containerWidth / a4Width;
+        const scaleY = containerHeight / a4Height;
+        const finalScale = Math.min(scaleX, scaleY);
+        
+        setScale(finalScale > 1 ? 1 : finalScale);
+      }
+    };
+
+    const observer = new ResizeObserver(updateScale);
+    if (containerRef.current) observer.observe(containerRef.current);
+    updateScale();
+
+    return () => observer.disconnect();
+  }, []);
 
   const neighbors = useMemo(() => {
     return allParcels.filter(p => {
@@ -166,10 +193,22 @@ const DigitalCertificateModal: React.FC<DigitalCertificateModalProps> = ({
         </div>
 
         {/* Content (Printable Area) */}
-        <div className="flex-1 overflow-y-auto p-8 bg-slate-100/30" id="printable-certificate">
+        <div 
+          ref={containerRef}
+          className="flex-1 overflow-hidden p-4 md:p-8 bg-slate-100/30 flex items-center justify-center relative" 
+          id="printable-certificate-container"
+        >
           <div 
             ref={printRef}
-            className="bg-white w-full mx-auto shadow-sm border border-slate-200 rounded-[32px] overflow-hidden p-12 print:shadow-none print:border-none print:p-0"
+            id="printable-certificate"
+            style={{ 
+              width: '794px', 
+              height: '1123px',
+              transform: `scale(${scale})`,
+              transformOrigin: 'center center',
+              flexShrink: 0
+            }}
+            className="bg-white shadow-2xl border border-slate-200 overflow-hidden p-12 print:shadow-none print:border-none print:p-10 print:transform-none print:w-[210mm] print:h-[297mm] flex flex-col transition-transform duration-300"
             dir="rtl"
           >
             {/* Engineering Certificate Header - Optimized Space */}
@@ -386,18 +425,24 @@ const DigitalCertificateModal: React.FC<DigitalCertificateModalProps> = ({
             position: fixed;
             left: 0;
             top: 0;
-            width: 210mm;
-            height: 297mm;
-            padding: 10mm;
-            margin: 0;
-            background: white;
-            overflow: hidden;
+            width: 210mm !important;
+            height: 297mm !important;
+            padding: 15mm !important;
+            margin: 0 !important;
+            background: white !important;
+            overflow: hidden !important;
+            transform: none !important;
+            border: none !important;
+            box-shadow: none !important;
           }
           .coord-tooltip, .neighbor-tooltip, .neighbor-label, .target-label, .coord-label-pro {
             background: transparent !important;
             border: none !important;
             box-shadow: none !important;
           }
+        }
+        #printable-certificate {
+          user-select: none;
         }
         table {
           page-break-inside: auto;

@@ -900,6 +900,8 @@ export default function App() {
                           } else {
                             setHighlightedParcelId(parcel.id);
                             setCenterTrigger(prev => prev + 1);
+                            setIsSearchActive(false);
+                            setSearchQuery('');
                           }
                         }}
                         className={cn(
