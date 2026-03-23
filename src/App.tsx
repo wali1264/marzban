@@ -618,6 +618,7 @@ export default function App() {
         setSelectedParcelForRotation(parcel);
         setRotationAngle(parcel.angle || 0);
         setHighlightedParcelId(parcel.id);
+        setShowRotationModal(true);
       }
     } else if (mode === 'MANAGE') {
       const parcelId = cycle.map(p => p.id).sort().join(',');
@@ -643,7 +644,7 @@ export default function App() {
     }
   };
 
-  const splitPolygon = (cycle: Point[], percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL', angle: number = 0): [number, number][][] => {
+  const splitPolygon = (cycle: Point[], percentage: number, angle: number = 0): [number, number][][] => {
     const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
     let poly = turf.polygon([coords]);
     const centroid = turf.centroid(poly);
@@ -657,8 +658,8 @@ export default function App() {
     const totalArea = turf.area(poly);
     const targetArea = totalArea * (percentage / 100);
 
-    let min = orientation === 'VERTICAL' ? bbox[0] : bbox[1];
-    let max = orientation === 'VERTICAL' ? bbox[2] : bbox[3];
+    let min = bbox[1];
+    let max = bbox[3];
     let bestIntersection: any = null;
 
     // High-precision binary search (45 iterations for sub-millimeter precision)
@@ -666,12 +667,7 @@ export default function App() {
       const mid = (min + max) / 2;
       
       // Create a "Water Level" clipping box from the bottom up to 'mid'
-      let clipPoly;
-      if (orientation === 'VERTICAL') {
-        clipPoly = turf.polygon([[[bbox[0] - 0.1, bbox[1] - 0.1], [mid, bbox[1] - 0.1], [mid, bbox[3] + 0.1], [bbox[0] - 0.1, bbox[3] + 0.1], [bbox[0] - 0.1, bbox[1] - 0.1]]]);
-      } else {
-        clipPoly = turf.polygon([[[bbox[0] - 0.1, bbox[1] - 0.1], [bbox[2] + 0.1, bbox[1] - 0.1], [bbox[2] + 0.1, mid], [bbox[0] - 0.1, mid], [bbox[0] - 0.1, bbox[1] - 0.1]]]);
-      }
+      const clipPoly = turf.polygon([[[bbox[0] - 0.1, bbox[1] - 0.1], [bbox[2] + 0.1, bbox[1] - 0.1], [bbox[2] + 0.1, mid], [bbox[0] - 0.1, mid], [bbox[0] - 0.1, bbox[1] - 0.1]]]);
 
       let intersection = turf.intersect(turf.featureCollection([poly, clipPoly]));
       
@@ -706,12 +702,17 @@ export default function App() {
     return [];
   };
 
-  const handleAddDivision = (name: string, percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL') => {
+  const handleAddDivision = (name: string, percentage: number) => {
     if (!selectedCycle) return;
 
     const parcelId = selectedCycle.map(p => p.id).sort().join(',');
     let existingParcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
     
+    if (existingParcel && !existingParcel.isAngleSet) {
+      alert("خطا: ابتدا باید زاویه قطعه را تنظیم و تایید کنید.");
+      return;
+    }
+
     const currentTotal = existingParcel?.divisions.reduce((sum, d) => sum + d.percentage, 0) || 0;
     if (currentTotal + percentage > 100.01) { // Small epsilon for float math
       alert(`خطا: مجموع سهام نمی‌تواند بیش از ۱۰۰٪ باشد. (باقیمانده: ${Math.max(0, 100 - currentTotal).toFixed(1)}٪)`);
@@ -727,11 +728,11 @@ export default function App() {
     // For simplicity in this version, we'll just store the cumulative geometry.
     
     const parcelAngle = existingParcel?.angle || 0;
-    const cumulativeGeometries = splitPolygon(selectedCycle, percentage + currentTotal, orientation, parcelAngle);
+    const cumulativeGeometries = splitPolygon(selectedCycle, percentage + currentTotal, parcelAngle);
     let finalGeometries = cumulativeGeometries;
 
     if (currentTotal > 0) {
-      const previousCumulativeGeometries = splitPolygon(selectedCycle, currentTotal, orientation, parcelAngle);
+      const previousCumulativeGeometries = splitPolygon(selectedCycle, currentTotal, parcelAngle);
       
       const poly1 = turf.union(turf.featureCollection(cumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
       const poly2 = turf.union(turf.featureCollection(previousCumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
@@ -752,8 +753,7 @@ export default function App() {
       id: Math.random().toString(36).substr(2, 9),
       partnerId: name,
       percentage,
-      geometry: finalGeometries,
-      orientation
+      geometry: finalGeometries
     };
 
     if (existingParcel) {
@@ -781,8 +781,30 @@ export default function App() {
   const handleUpdateParcelAngle = (parcelId: string, newAngle: number) => {
     setParcels(prev => prev.map(p => {
       if (p.id === parcelId) {
+        if (p.isAngleSet && p.divisions.length > 0) {
+          return p; // Locked
+        }
         const updatedParcel = { ...p, angle: newAngle };
         return recalculateParcelDivisions(updatedParcel, p.divisions);
+      }
+      return p;
+    }));
+  };
+
+  const handleConfirmParcelAngle = (parcelId: string) => {
+    setParcels(prev => prev.map(p => 
+      p.id === parcelId ? { ...p, isAngleSet: true } : p
+    ));
+  };
+
+  const handleDeleteParcelAngle = (parcelId: string) => {
+    setParcels(prev => prev.map(p => {
+      if (p.id === parcelId) {
+        if (p.divisions.length > 0) {
+          alert("خطا: برای حذف زاویه، ابتدا باید تمام سهام این قطعه را حذف کنید.");
+          return p;
+        }
+        return { ...p, angle: 0, isAngleSet: false };
       }
       return p;
     }));
@@ -820,7 +842,7 @@ export default function App() {
 
     const newDivisions = updatedDivisions.map(div => {
       // "Water Level" logic: Pour cumulative volume and subtract previous volume
-      const cumulativeGeometries = splitPolygon(cycle, div.percentage + currentTotal, div.orientation, parcelAngle);
+      const cumulativeGeometries = splitPolygon(cycle, div.percentage + currentTotal, parcelAngle);
       let finalGeometries = cumulativeGeometries;
 
       if (previousCumulativeGeometries) {
@@ -1268,6 +1290,7 @@ export default function App() {
           parcels={parcels}
           generationFilter={generationFilter}
           highlightedParcelId={highlightedParcelId}
+          onAngleChange={handleUpdateParcelAngle}
         />
 
         {/* Floating Controls */}
@@ -1596,7 +1619,6 @@ export default function App() {
                   e.preventDefault();
                   const formData = new FormData(e.currentTarget);
                   const name = formData.get('name') as string;
-                  const orientation = formData.get('orientation') as 'HORIZONTAL' | 'VERTICAL';
                   const rawValue = Number(shareInputValue);
                   
                   let percentage = rawValue;
@@ -1604,7 +1626,7 @@ export default function App() {
                     percentage = (rawValue / selectedParcelArea) * 100;
                   }
 
-                  handleAddDivision(name, percentage, orientation);
+                  handleAddDivision(name, percentage);
                   setShareInputValue('');
                 }}>
                   <div className="space-y-4">
@@ -1644,25 +1666,6 @@ export default function App() {
                           محاسبه خودکار: {((Number(shareInputValue) / selectedParcelArea) * 100).toFixed(2)}٪ از کل {selectedParcelArea.toFixed(1)} متر مربع
                         </p>
                       )}
-                    </div>
-                    <div>
-                      <label className="block text-sm font-bold text-slate-700 mb-2">جهت تقسیم</label>
-                      <div className="grid grid-cols-2 gap-3">
-                        <label className="relative flex items-center justify-center p-4 bg-slate-50 rounded-2xl border-2 border-transparent cursor-pointer has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50 transition-all">
-                          <input type="radio" name="orientation" value="VERTICAL" defaultChecked className="sr-only" />
-                          <div className="flex flex-col items-center gap-1">
-                            <div className="w-px h-4 bg-slate-400" />
-                            <span className="text-xs font-bold">عمودی</span>
-                          </div>
-                        </label>
-                        <label className="relative flex items-center justify-center p-4 bg-slate-50 rounded-2xl border-2 border-transparent cursor-pointer has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50 transition-all">
-                          <input type="radio" name="orientation" value="HORIZONTAL" className="sr-only" />
-                          <div className="flex flex-col items-center gap-1">
-                            <div className="h-px w-4 bg-slate-400" />
-                            <span className="text-xs font-bold">افقی</span>
-                          </div>
-                        </label>
-                      </div>
                     </div>
                   </div>
 
@@ -2139,10 +2142,31 @@ export default function App() {
           if (mode === 'ROTATE') setMode('VIEW');
         }}
         angle={rotationAngle}
-        onAngleChange={(newAngle) => {
-          setRotationAngle(newAngle);
+        isAngleSet={selectedParcelForRotation?.isAngleSet}
+        hasDivisions={(selectedParcelForRotation?.divisions.length || 0) > 0}
+        onConfirm={() => {
           if (selectedParcelForRotation) {
-            handleUpdateParcelAngle(selectedParcelForRotation.id, newAngle);
+            handleConfirmParcelAngle(selectedParcelForRotation.id);
+            setShowRotationModal(false);
+            setHighlightedParcelId(null);
+            setSelectedParcelForRotation(null);
+            if (mode === 'ROTATE') setMode('VIEW');
+          }
+        }}
+        onEdit={() => {
+          if (selectedParcelForRotation) {
+            setParcels(prev => prev.map(p => 
+              p.id === selectedParcelForRotation.id ? { ...p, isAngleSet: false } : p
+            ));
+          }
+        }}
+        onDelete={() => {
+          if (selectedParcelForRotation) {
+            handleDeleteParcelAngle(selectedParcelForRotation.id);
+            setShowRotationModal(false);
+            setHighlightedParcelId(null);
+            setSelectedParcelForRotation(null);
+            if (mode === 'ROTATE') setMode('VIEW');
           }
         }}
         parcelName={selectedParcelForRotation?.name}

@@ -38,6 +38,7 @@ interface MapViewProps {
   parcels?: Parcel[];
   generationFilter?: number;
   highlightedParcelId?: string | null;
+  onAngleChange?: (parcelId: string, angle: number) => void;
 }
 
 // Calculate geometric center of points
@@ -113,6 +114,95 @@ function getMultiCentroid(geometries: [number, number][][]): [number, number] {
   return [centroid.geometry.coordinates[1], centroid.geometry.coordinates[0]];
 }
 
+interface RotationLineProps {
+  center: { lat: number; lng: number };
+  angle: number;
+  onAngleChange: (angle: number) => void;
+}
+
+function RotationLine({ center, angle, onAngleChange }: RotationLineProps) {
+  // Calculate endpoints based on angle
+  // We'll use a fixed distance for the guide line, e.g., 30 meters
+  const radius = 30; 
+  
+  const p1 = useMemo(() => {
+    const dest = turf.destination(
+      turf.point([center.lng, center.lat]),
+      radius,
+      angle,
+      { units: 'meters' }
+    );
+    return [dest.geometry.coordinates[1], dest.geometry.coordinates[0]] as [number, number];
+  }, [center.lat, center.lng, angle]);
+
+  const p2 = useMemo(() => {
+    const dest = turf.destination(
+      turf.point([center.lng, center.lat]),
+      radius,
+      angle + 180,
+      { units: 'meters' }
+    );
+    return [dest.geometry.coordinates[1], dest.geometry.coordinates[0]] as [number, number];
+  }, [center.lat, center.lng, angle]);
+
+  return (
+    <>
+      <Polyline 
+        positions={[p1, p2]}
+        pathOptions={{ color: '#f59e0b', weight: 4, dashArray: '8, 12', opacity: 0.9 }}
+      />
+      <Marker
+        position={p1}
+        draggable={true}
+        eventHandlers={{
+          drag: (e) => {
+            const newPos = e.target.getLatLng();
+            const bearing = turf.bearing(
+              turf.point([center.lng, center.lat]),
+              turf.point([newPos.lng, newPos.lat])
+            );
+            // bearing is -180 to 180, convert to 0-360
+            const normalized = (bearing + 360) % 360;
+            onAngleChange(Math.round(normalized * 10) / 10);
+          }
+        }}
+        icon={L.divIcon({
+          className: 'rotation-handle',
+          html: `<div class="w-8 h-8 bg-amber-500 rounded-full border-4 border-white shadow-2xl flex items-center justify-center cursor-move">
+            <div class="w-2 h-2 bg-white rounded-full"></div>
+          </div>`,
+          iconSize: [32, 32],
+          iconAnchor: [16, 16]
+        })}
+      />
+      <Marker
+        position={p2}
+        draggable={true}
+        eventHandlers={{
+          drag: (e) => {
+            const newPos = e.target.getLatLng();
+            const bearing = turf.bearing(
+              turf.point([center.lng, center.lat]),
+              turf.point([newPos.lng, newPos.lat])
+            );
+            // For the opposite handle, the angle is bearing + 180
+            const normalized = (bearing + 180 + 360) % 360;
+            onAngleChange(Math.round(normalized * 10) / 10);
+          }
+        }}
+        icon={L.divIcon({
+          className: 'rotation-handle',
+          html: `<div class="w-8 h-8 bg-amber-500 rounded-full border-4 border-white shadow-2xl flex items-center justify-center cursor-move">
+            <div class="w-2 h-2 bg-white rounded-full"></div>
+          </div>`,
+          iconSize: [32, 32],
+          iconAnchor: [16, 16]
+        })}
+      />
+    </>
+  );
+}
+
 export default function MapView({ 
   points, 
   connections, 
@@ -131,7 +221,8 @@ export default function MapView({
   centerTrigger,
   parcels = [],
   generationFilter = 1,
-  highlightedParcelId = null
+  highlightedParcelId = null,
+  onAngleChange
 }: MapViewProps) {
   
   const cycles = useMemo(() => findCycles(points, connections), [points, connections]);
@@ -534,6 +625,15 @@ export default function MapView({
 
         {renderConnections()}
         {renderPolygons()}
+
+        {/* Rotation Guide Line */}
+        {mode === 'ROTATE' && highlightedParcelId && highlightedParcelCenter && (
+          <RotationLine 
+            center={highlightedParcelCenter}
+            angle={parcels.find(p => p.id === highlightedParcelId)?.angle || 0}
+            onAngleChange={(newAngle) => onAngleChange?.(highlightedParcelId, newAngle)}
+          />
+        )}
 
         {/* Tracking Line and Distance */}
         {mode === 'TRACKING' && userLocation && trackingTarget && (

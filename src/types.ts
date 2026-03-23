@@ -35,7 +35,6 @@ export interface Division {
   partnerId: string;
   percentage: number;
   geometry: [number, number][][]; // Coordinates of the sub-polygons (MultiPolygon support)
-  orientation: 'HORIZONTAL' | 'VERTICAL';
 }
 
 export interface Parcel {
@@ -46,6 +45,7 @@ export interface Parcel {
   area: number; // in square meters
   ownerName?: string;
   angle?: number; // Rotation angle for divisions in degrees
+  isAngleSet?: boolean; // Whether the rotation angle has been confirmed
   generation?: number; // 1 for root, 2 for nested, etc.
   createdAt: number;
 }
