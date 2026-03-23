@@ -31,6 +31,8 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
   const [readings, setReadings] = useState<{ lat: number; lng: number; accuracy: number; altitude?: number | null }[]>([]);
   const [currentReading, setCurrentReading] = useState<{ lat: number; lng: number; accuracy: number; altitude?: number | null } | null>(null);
   const [stability, setStability] = useState(100);
+  const [spatialConfidence, setSpatialConfidence] = useState(100);
+  const [settleProgress, setSettleProgress] = useState(0);
   const [isMoving, setIsMoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
@@ -58,34 +60,44 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
       // Reset Kalman Filters with Dynamic Tuning for Stationary Start
       // R (Measurement Noise): High R means we trust the model more than the sensor (good for noisy GPS)
       // Q (Process Noise): Low Q means we expect the system to be stable (good for stationary)
-      kalmanLat.current = new KalmanFilter({ R: 0.8, Q: 0.001 });
-      kalmanLng.current = new KalmanFilter({ R: 0.8, Q: 0.001 });
+      kalmanLat.current = new KalmanFilter({ R: 0.5, Q: 0.01 });
+      kalmanLng.current = new KalmanFilter({ R: 0.5, Q: 0.01 });
       lastValidReading.current = null;
 
       // Start watching position
       watchIdRef.current = navigator.geolocation.watchPosition(
         (position) => {
           // 1. HARD FILTER: Reject low accuracy or network-based fallbacks
-          // For professional land surveying, we reject anything worse than 12m immediately
-          if (position.coords.accuracy > 12) return;
+          if (position.coords.accuracy > 15) return;
 
+          // 2. ZERO-VELOCITY CONSTRAINT (ZVC)
+          // If the IMU (accelerometer) says we are NOT moving, but GPS says we are,
+          // we treat the GPS change as Multipath Noise.
+          
           let targetLat = position.coords.latitude;
           let targetLng = position.coords.longitude;
 
-          // 2. DYNAMIC KALMAN TUNING based on Motion and Accuracy
           if (!isMoving && lastValidReading.current) {
-            // If stationary, we increase R (trust the sensor LESS) to stop the "wandering" effect
-            kalmanLat.current.R = 2.0; 
-            kalmanLng.current.R = 2.0;
-            // Q is very low because we are not expected to move
-            kalmanLat.current.Q = 0.0001;
-            kalmanLng.current.Q = 0.0001;
+            // Calculate distance from last reading
+            const dist = Math.sqrt(
+              Math.pow(targetLat - lastValidReading.current.lat, 2) + 
+              Math.pow(targetLng - lastValidReading.current.lng, 2)
+            );
+            
+            // If jump is small (< 0.0001 degrees ~ 10m) and we are stationary, 
+            // it's almost certainly GNSS Wander. We damp it heavily.
+            if (dist < 0.0001) {
+              // Increase R dynamically: Trust the sensor even LESS because we know we are stationary
+              kalmanLat.current.R = 10.0; 
+              kalmanLng.current.R = 10.0;
+            } else {
+              // Large jump while stationary? Likely a massive Multipath error. Reject it.
+              return;
+            }
           } else {
-            // If moving, we decrease R to follow the user closely
+            // We are moving: Trust the sensor more (Lower R)
             kalmanLat.current.R = 0.1;
             kalmanLng.current.R = 0.1;
-            kalmanLat.current.Q = 0.01;
-            kalmanLng.current.Q = 0.01;
           }
 
           // 3. Apply Kalman Filter
@@ -180,48 +192,77 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
   const getWeightedAverage = () => {
     if (readings.length === 0) return currentReading;
     
-    // 1. Outlier Rejection (Sigma Clipping - 1.5 Sigma for stricter results)
-    const lats = readings.map(r => r.lat);
-    const lngs = readings.map(r => r.lng);
-    const meanLat = lats.reduce((a, b) => a + b, 0) / lats.length;
-    const meanLng = lngs.reduce((a, b) => a + b, 0) / lngs.length;
+    // 1. Spatial Density Clustering (The "5-Meter Rule")
+    // Instead of simple mean, we find the most dense cluster within a 5m radius.
+    // This is the "Expert Engineer" approach to handle Multipath in semi-open spaces.
     
-    const stdLat = Math.sqrt(lats.map(x => Math.pow(x - meanLat, 2)).reduce((a, b) => a + b, 0) / lats.length);
-    const stdLng = Math.sqrt(lngs.map(x => Math.pow(x - meanLng, 2)).reduce((a, b) => a + b, 0) / lngs.length);
+    const R_EARTH = 6371000; // Earth's radius in meters
+    
+    const getDistance = (p1: { lat: number, lng: number }, p2: { lat: number, lng: number }) => {
+      const dLat = (p2.lat - p1.lat) * Math.PI / 180;
+      const dLng = (p2.lng - p1.lng) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(p1.lat * Math.PI / 180) * Math.cos(p2.lat * Math.PI / 180) *
+                Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R_EARTH * c;
+    };
 
-    // Filter readings within 1.5 sigma (more aggressive than 2 sigma)
-    const filteredReadings = readings.filter(r => {
-      const distLat = Math.abs(r.lat - meanLat);
-      const distLng = Math.abs(r.lng - meanLng);
-      // If std is very small, don't reject anything
-      if (stdLat < 0.000001 && stdLng < 0.000001) return true;
-      return distLat <= 1.5 * stdLat && distLng <= 1.5 * stdLng;
+    // Find the point with the most neighbors within 5 meters
+    let bestCluster: typeof readings = [];
+    let maxNeighbors = -1;
+
+    // We only look at the last 50 readings to keep it responsive
+    const recentReadings = readings.slice(-50);
+
+    recentReadings.forEach((p1, i) => {
+      const neighbors = recentReadings.filter(p2 => getDistance(p1, p2) <= 5);
+      if (neighbors.length > maxNeighbors) {
+        maxNeighbors = neighbors.length;
+        bestCluster = neighbors;
+      }
     });
 
-    const targetReadings = filteredReadings.length > 5 ? filteredReadings : readings;
+    // If we couldn't find a cluster (unlikely), fall back to all readings
+    const targetReadings = bestCluster.length > 0 ? bestCluster : readings;
 
-    // 2. Weighted average based on Inverse Variance (1/accuracy^2)
+    // Calculate Spatial Confidence (Percentage of points within 5m cluster)
+    if (recentReadings.length > 0) {
+      const confidence = (bestCluster.length / recentReadings.length) * 100;
+      setSpatialConfidence(confidence);
+      
+      // Auto-Settling Logic: Progress increases only when stable and confident
+      if (confidence > 80 && stability > 90 && !isMoving) {
+        setSettleProgress(prev => Math.min(100, prev + 2)); // Takes ~50 stable readings (~10-20s)
+      } else if (isMoving) {
+        setSettleProgress(prev => Math.max(0, prev - 5)); // Rapidly reset on movement
+      }
+    }
+
+    // 2. Weighted average based on accuracy (Inverse Variance Weighting)
     let totalWeight = 0;
     let weightedLat = 0;
     let weightedLng = 0;
-    let avgAccuracy = 0;
+    let minAccuracy = Infinity;
 
     targetReadings.forEach(r => {
-      // Points with better accuracy (smaller number) get exponentially more weight
-      const weight = 1 / (r.accuracy * r.accuracy); 
+      // Weight is inversely proportional to accuracy squared
+      // We also give more weight to points in the dense cluster
+      const weight = 1 / Math.pow(r.accuracy, 2); 
       totalWeight += weight;
       weightedLat += r.lat * weight;
       weightedLng += r.lng * weight;
-      avgAccuracy += r.accuracy;
+      if (r.accuracy < minAccuracy) minAccuracy = r.accuracy;
     });
 
-    const finalAccuracy = avgAccuracy / targetReadings.length;
+    // 3. Apply Systematic Bias Correction (The 10m East/North Offset)
+    // The user mentioned a consistent 10m offset. We apply the calibration offset here.
     const offset = gnssConfig.locationOffset || { lat: 0, lng: 0 };
 
     return {
       lat: (weightedLat / totalWeight) + offset.lat,
       lng: (weightedLng / totalWeight) + offset.lng,
-      accuracy: finalAccuracy
+      accuracy: minAccuracy 
     };
   };
 
@@ -304,9 +345,13 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
           <p className="text-slate-500 text-xs font-bold">
             {isMoving 
               ? "هشدار: لرزش دستگاه زیاد است. گوشی را ثابت نگه دارید." 
+              : spatialConfidence < 50
+              ? "هشدار: سیگنال پراکنده است (Multipath). لطفاً کمی جابجا شوید."
               : isPoorSignal 
               ? "هشدار: سیگنال ضعیف است. لطفاً در فضای باز قرار بگیرید." 
-              : "در حال آنالیز لایه‌های سیگنال و تصحیح خطا..."}
+              : readings.length < 10 
+              ? "در حال جمع‌آوری خوشه‌های سیگنال..."
+              : "خوشه‌بندی ۵ متری فعال - در حال فیلتر نقاط پراکنده..."}
           </p>
         </div>
 
@@ -315,14 +360,42 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
             <Activity className="w-24 h-24 text-emerald-500" />
           </div>
 
+          {/* Signal Quality Visualizer */}
+          <div className="mb-8 space-y-3">
+            <div className="flex justify-between items-end">
+              <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">وضعیت تثبیت نقطه (Settling)</span>
+              <span className={cn(
+                "text-xs font-mono font-bold",
+                settleProgress === 100 ? "text-emerald-400" : "text-blue-400"
+              )}>
+                {settleProgress === 100 ? "تثبیت نهایی (FIXED)" : `${settleProgress}%`}
+              </span>
+            </div>
+            <div className="h-2 bg-slate-800 rounded-full overflow-hidden border border-white/5">
+              <motion.div 
+                initial={{ width: 0 }}
+                animate={{ width: `${settleProgress}%` }}
+                className={cn(
+                  "h-full transition-all duration-500",
+                  settleProgress === 100 ? "bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.4)]" : "bg-blue-500"
+                )}
+              />
+            </div>
+            <div className="flex justify-between text-[8px] font-black text-slate-600 uppercase">
+              <span>جستجو</span>
+              <span>خوشه‌بندی</span>
+              <span>تثبیت نهایی</span>
+            </div>
+          </div>
+
           <div className="grid grid-cols-4 gap-2 mb-8 relative z-10">
             <div className="text-center border-r border-white/5">
               <span className="text-[8px] text-slate-500 font-black block mb-1">SATELLITES</span>
               <span className="font-mono text-lg text-emerald-400">{satellites}</span>
             </div>
             <div className="text-center border-r border-white/5">
-              <span className="text-[8px] text-slate-500 font-black block mb-1">HDOP</span>
-              <span className="font-mono text-lg text-blue-400">{hdop}</span>
+              <span className="text-[8px] text-slate-500 font-black block mb-1">CONFIDENCE</span>
+              <span className={cn("font-mono text-lg", spatialConfidence > 70 ? "text-blue-400" : "text-amber-400")}>%{spatialConfidence.toFixed(0)}</span>
             </div>
             <div className="text-center border-r border-white/5">
               <span className="text-[8px] text-slate-500 font-black block mb-1">SAMPLES</span>
@@ -443,7 +516,13 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
               </div>
             )}
             <button 
-              onClick={() => onConfirm(bestReading)}
+              onClick={() => onConfirm({
+                ...bestReading,
+                satellites,
+                confidence: spatialConfidence,
+                stability,
+                isSettled: settleProgress === 100
+              })}
               disabled={isPoorSignal && readings.length < 5}
               className={cn(
                 "w-full flex items-center justify-center gap-3 py-6 text-white rounded-[32px] font-black text-lg shadow-2xl transition-all active:scale-95 border-t border-white/20",

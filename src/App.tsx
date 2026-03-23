@@ -44,6 +44,7 @@ import {
   Wifi
 } from 'lucide-react';
 import * as turf from '@turf/turf';
+import { findCycles, calculatePolygonArea } from './utils';
 import MapView from './components/Map/MapView';
 import PrecisionRecorder from './components/Recorder/PrecisionRecorder';
 import BackupModal from './components/Backup/BackupModal';
@@ -72,6 +73,24 @@ export default function App() {
   const [showUserLocation, setShowUserLocation] = useState(false);
 
   const [parcels, setParcels] = useState<Parcel[]>([]);
+  
+  // Clean up parcels that are no longer valid cycles
+  useEffect(() => {
+    if (points.length === 0 || connections.length === 0) {
+      if (parcels.length > 0) setParcels([]);
+      return;
+    }
+    
+    const currentCycles = findCycles(points, connections);
+    const cycleIds = new Set(currentCycles.map(cycle => cycle.map(p => p.id).sort().join(',')));
+    
+    setParcels(prev => {
+      const filtered = prev.filter(p => cycleIds.has(p.pointIds.sort().join(',')));
+      if (filtered.length !== prev.length) return filtered;
+      return prev;
+    });
+  }, [connections, points]);
+
   const [showDivisionModal, setShowDivisionModal] = useState(false);
   const [selectedCycle, setSelectedCycle] = useState<Point[] | null>(null);
   
@@ -97,6 +116,95 @@ export default function App() {
   const [isEditAreaMode, setIsEditAreaMode] = useState(false);
   const [shareInputValue, setShareInputValue] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
+  const [showResetMenu, setShowResetMenu] = useState(false);
+
+  const getGenerationForParcel = (pointIds: string[], currentParcels: Parcel[]) => {
+    const cycle = pointIds.map(id => points.find(p => p.id === id)!).filter(Boolean);
+    if (cycle.length < 3) return 1;
+    
+    const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
+    const poly = turf.polygon([coords as any]);
+    
+    let containers = 0;
+    currentParcels.forEach(other => {
+      if (other.pointIds.sort().join(',') === pointIds.sort().join(',')) return;
+      
+      const otherCycle = other.pointIds.map(id => points.find(p => p.id === id)!).filter(Boolean);
+      if (otherCycle.length < 3) return;
+
+      const otherCoords = [...otherCycle.map(p => [p.lng, p.lat]), [otherCycle[0].lng, otherCycle[0].lat]];
+      const otherPoly = turf.polygon([otherCoords as any]);
+      
+      try {
+        // Use a tiny buffer to avoid edge issues
+        if (turf.booleanContains(otherPoly, poly)) {
+          containers++;
+        }
+      } catch (e) {}
+    });
+    
+    return containers + 1;
+  };
+
+  const handleReset = (gen: number) => {
+    const confirmMsg = gen === 1 
+      ? "آیا از ریست کامل (تمام نسل‌ها) اطمینان دارید؟ مختصات باقی می‌مانند اما تمام خطوط و نام‌ها پاک می‌شوند."
+      : `آیا از ریست نسل ${gen} و زیرمجموعه‌های آن اطمینان دارید؟ نسل‌های بالاتر دست‌نخورده باقی می‌مانند.`;
+
+    if (confirm(confirmMsg)) {
+      if (gen === 1) {
+        setConnections([]);
+        setParcels([]);
+      } else {
+        const keepThreshold = gen - 1;
+        
+        // 1. Remove parcels of this generation or higher
+        const filteredParcels = parcels.filter(p => (p.generation || 1) <= keepThreshold);
+        
+        // 2. Clear divisions from parcels that remain
+        const resetParcels = filteredParcels.map(p => ({
+          ...p,
+          divisions: []
+        }));
+
+        setParcels(resetParcels);
+
+        // 3. Remove connections that are not part of any remaining parcel
+        const keepConnIds = new Set<string>();
+        resetParcels.forEach(p => {
+          for (let i = 0; i < p.pointIds.length; i++) {
+            const p1 = p.pointIds[i];
+            const p2 = p.pointIds[(i + 1) % p.pointIds.length];
+            const conn = connections.find(c => 
+              (c.fromId === p1 && c.toId === p2) || 
+              (c.fromId === p2 && c.toId === p1)
+            );
+            if (conn) keepConnIds.add(conn.id);
+          }
+        });
+        
+        setConnections(prev => prev.filter(c => keepConnIds.has(c.id)));
+      }
+      setShowResetMenu(false);
+    }
+  };
+
+  const handleRefreshSync = () => {
+    setParcels(prev => {
+      const updated = prev.map(p => {
+        const parcelPoints = p.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean);
+        if (parcelPoints.length < 3) return p;
+        return {
+          ...p,
+          area: calculatePolygonArea(parcelPoints),
+          generation: getGenerationForParcel(p.pointIds, prev)
+        };
+      });
+      return updated;
+    });
+    alert("تمام مساحت‌ها و نسل‌ها با موفقیت بازنگری و همگام‌سازی شدند.");
+    setShowResetMenu(false);
+  };
   const [loginError, setLoginError] = useState(false);
 
   const [pendingDeleteConnId, setPendingDeleteConnId] = useState<string | null>(null);
@@ -410,7 +518,8 @@ export default function App() {
           pointIds: cycle.map(p => p.id),
           ownerName: '',
           divisions: [],
-          totalArea: 0 // Will be calculated if needed, but ownerName is the focus here
+          area: calculatePolygonArea(cycle),
+          generation: getGenerationForParcel(cycle.map(p => p.id), parcels)
         };
         // We don't add it to state yet, we'll add it when the owner is saved
       }
@@ -432,7 +541,7 @@ export default function App() {
     }
 
     const bbox = turf.bbox(poly);
-    const totalArea = turf.area(poly);
+    const totalArea = calculatePolygonArea(cycle);
     const targetArea = totalArea * (percentage / 100);
 
     let min = orientation === 'VERTICAL' ? bbox[0] : bbox[1];
@@ -552,7 +661,9 @@ export default function App() {
     if (existingParcel) {
       setParcels(prev => prev.map(p => p.id === existingParcel!.id ? {
         ...p,
-        divisions: [...p.divisions, newDivision]
+        divisions: [...p.divisions, newDivision],
+        area: calculatePolygonArea(selectedCycle!),
+        generation: getGenerationForParcel(selectedCycle!.map(pt => pt.id), prev)
       } : p));
     } else {
       const newParcel: Parcel = {
@@ -560,7 +671,8 @@ export default function App() {
         name: `قطعه ${parcels.length + 1}`,
         pointIds: selectedCycle.map(p => p.id),
         divisions: [newDivision],
-        area: turf.area(turf.polygon([[...selectedCycle.map(p => [p.lng, p.lat]), [selectedCycle[0].lng, selectedCycle[0].lat]]]))
+        area: calculatePolygonArea(selectedCycle),
+        generation: getGenerationForParcel(selectedCycle.map(p => p.id), parcels)
       };
       setParcels(prev => [...prev, newParcel]);
     }
@@ -690,11 +802,22 @@ export default function App() {
         const exists = prev.some(p => p.id === selectedParcelForOwner.id);
         if (exists) {
           return prev.map(p => 
-            p.id === selectedParcelForOwner.id ? { ...p, ownerName: ownerNameInput } : p
+            p.id === selectedParcelForOwner.id ? { 
+              ...p, 
+              ownerName: ownerNameInput,
+              area: calculatePolygonArea(p.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean)),
+              generation: getGenerationForParcel(p.pointIds, prev)
+            } : p
           );
         } else {
           // Add the new parcel
-          return [...prev, { ...selectedParcelForOwner, ownerName: ownerNameInput }];
+          const newParcel = { 
+            ...selectedParcelForOwner, 
+            ownerName: ownerNameInput,
+            area: calculatePolygonArea(selectedParcelForOwner.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean)),
+            generation: getGenerationForParcel(selectedParcelForOwner.pointIds, prev)
+          };
+          return [...prev, newParcel];
         }
       });
       setShowOwnerModal(false);
@@ -822,12 +945,7 @@ export default function App() {
 
   const selectedParcelArea = useMemo(() => {
     if (!selectedCycle || selectedCycle.length < 3) return 0;
-    try {
-      const poly = turf.polygon([[...selectedCycle.map(p => [p.lng, p.lat]), [selectedCycle[0].lng, selectedCycle[0].lat]]]);
-      return turf.area(poly);
-    } catch (e) {
-      return 0;
-    }
+    return calculatePolygonArea(selectedCycle);
   }, [selectedCycle]);
 
   const editingParcel = pendingDivisionAction ? parcels.find(p => p.id === pendingDivisionAction.parcelId) : null;
@@ -914,6 +1032,52 @@ export default function App() {
            >
              <Database className="w-5 h-5" />
            </button>
+
+           {isAdmin && (
+             <div className="relative">
+               <button 
+                 onClick={() => setShowResetMenu(!showResetMenu)}
+                 className={cn(
+                   "p-2 rounded-full transition-colors",
+                   showResetMenu ? "bg-red-100 text-red-600" : "text-slate-500 hover:bg-slate-100"
+                 )}
+                 title="ریست اراضی"
+               >
+                 <RefreshCw className="w-5 h-5" />
+               </button>
+               
+               <AnimatePresence>
+                 {showResetMenu && (
+                   <motion.div 
+                     initial={{ opacity: 0, y: 10 }}
+                     animate={{ opacity: 1, y: 0 }}
+                     exit={{ opacity: 0, y: 10 }}
+                     className="absolute top-full left-0 mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-slate-100 py-2 z-50 overflow-hidden"
+                   >
+                     <button 
+                       onClick={handleRefreshSync}
+                       className="w-full px-4 py-3 text-right text-xs text-emerald-600 hover:bg-emerald-50 transition-colors flex items-center justify-between font-bold"
+                     >
+                       <span>بروزرسانی و همگام‌سازی</span>
+                       <Activity className="w-4 h-4" />
+                     </button>
+                     <button 
+                       onClick={() => handleReset(2)}
+                       className="w-full px-4 py-2 text-right text-sm text-slate-600 hover:bg-slate-50 transition-colors"
+                     >
+                       ریست تقسیمات (نسل ۲)
+                     </button>
+                     <button 
+                       onClick={() => handleReset(3)}
+                       className="w-full px-4 py-2 text-right text-sm text-slate-600 hover:bg-slate-50 transition-colors"
+                     >
+                       ریست خرده‌مالکی (نسل ۳)
+                     </button>
+                   </motion.div>
+                 )}
+               </AnimatePresence>
+             </div>
+           )}
 
            {isAdmin && (
              <div className="flex items-center gap-1">
@@ -1301,7 +1465,8 @@ export default function App() {
                            name: 'موقت',
                            pointIds: selectedCycle.map(pt => pt.id),
                            divisions: [],
-                           area: turf.area(turf.polygon([[...selectedCycle.map(pt => [pt.lng, pt.lat]), [selectedCycle[0].lng, selectedCycle[0].lat]]]))
+                           area: calculatePolygonArea(selectedCycle),
+                           generation: getGenerationForParcel(selectedCycle.map(pt => pt.id), parcels)
                          };
                          handleAiConsult(tempParcel);
                       }

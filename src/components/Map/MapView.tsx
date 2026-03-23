@@ -4,6 +4,7 @@ import { MapContainer, TileLayer, Marker, Polyline, Circle, Polygon, Tooltip, us
 import L from 'leaflet';
 import * as turf from '@turf/turf';
 import { Point, Connection, AppMode, Parcel } from '../../types';
+import { cn, findCycles, calculatePolygonArea } from '../../utils';
 import { MapPin, Navigation, Target, Users } from 'lucide-react';
 
 // Fix for default marker icons in Leaflet with React
@@ -37,79 +38,6 @@ interface MapViewProps {
   parcels?: Parcel[];
   generationFilter?: number;
   highlightedParcelId?: string | null;
-}
-
-// Find all simple cycles in the graph of connections
-// For planar graphs, we want the "minimal" cycles (faces)
-function findCycles(points: Point[], connections: Connection[]): Point[][] {
-  const adj = new Map<string, string[]>();
-  connections.forEach(c => {
-    if (!adj.has(c.fromId)) adj.set(c.fromId, []);
-    if (!adj.has(c.toId)) adj.set(c.toId, []);
-    adj.get(c.fromId)!.push(c.toId);
-    adj.get(c.toId)!.push(c.fromId);
-  });
-
-  const cycles: string[][] = [];
-  const pointIds = Array.from(adj.keys());
-
-  // To find all minimal cycles, we can start a DFS from every node
-  // and limit the search depth or use a more exhaustive approach
-  const findFromNode = (startNode: string) => {
-    const stack: { u: string; p: string; path: string[] }[] = [{ u: startNode, p: '', path: [] }];
-    
-    while (stack.length > 0) {
-      const { u, p, path } = stack.pop()!;
-      
-      if (path.includes(u)) {
-        const cycle = path.slice(path.indexOf(u));
-        if (cycle.length >= 3) {
-          const sortedCycle = [...cycle].sort().join(',');
-          if (!cycles.some(c => [...c].sort().join(',') === sortedCycle)) {
-            cycles.push(cycle);
-          }
-        }
-        continue;
-      }
-
-      if (path.length > 200) continue; // Limit depth to prevent infinite loops/performance issues
-
-      const neighbors = adj.get(u) || [];
-      for (const v of neighbors) {
-        if (v === p) continue;
-        stack.push({ u: v, p: u, path: [...path, u] });
-      }
-    }
-  };
-
-  pointIds.forEach(id => findFromNode(id));
-
-  // Return all discovered cycles
-  return cycles.map(cycleIds => 
-    cycleIds.map(id => points.find(p => p.id === id)!).filter(Boolean)
-  );
-}
-
-// Precise area calculation in square meters
-function calculatePolygonArea(nodes: Point[]): number {
-  if (nodes.length < 3) return 0;
-  
-  const radius = 6378137; // Earth radius
-  let area = 0;
-  
-  for (let i = 0; i < nodes.length; i++) {
-    const p1 = nodes[i];
-    const p2 = nodes[(i + 1) % nodes.length];
-    
-    const lat1 = p1.lat * Math.PI / 180;
-    const lon1 = p1.lng * Math.PI / 180;
-    const lat2 = p2.lat * Math.PI / 180;
-    const lon2 = p2.lng * Math.PI / 180;
-    
-    area += (lon2 - lon1) * (2 + Math.sin(lat1) + Math.sin(lat2));
-  }
-  
-  return Math.abs(area * radius * radius / 2.0);
 }
 
 // Calculate geometric center of points

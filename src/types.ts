@@ -11,6 +11,11 @@ export interface Point {
   accuracy: number; // in meters
   name?: string;
   description?: string;
+  // GNSS Metadata for Audit
+  satellites?: number;
+  confidence?: number;
+  stability?: number;
+  isSettled?: boolean;
 }
 
 export interface Connection {
