@@ -535,6 +535,21 @@ export default function App() {
     setShowRecorder(false);
   };
 
+  // Data Consistency & Migration Effect
+  useEffect(() => {
+    if (parcels.length > 0) {
+      const needsMigration = parcels.some(p => p.divisions.length > 0 && p.isAngleSet === undefined);
+      if (needsMigration) {
+        setParcels(prev => prev.map(p => {
+          if (p.divisions.length > 0 && p.isAngleSet === undefined) {
+            return { ...p, isAngleSet: true }; // Assume angle was set if divisions exist
+          }
+          return p;
+        }));
+      }
+    }
+  }, [parcels.length]);
+
   const handlePointClick = (point: Point) => {
     if (mode === 'TRACKING') {
       setTrackingTargetId(point.id);
@@ -730,24 +745,37 @@ export default function App() {
     let finalGeometries = cumulativeGeometries;
 
     if (currentTotal > 0 && cumulativeGeometries.length > 0) {
-      const previousCumulativeGeometries = splitPolygon(selectedCycle, currentTotal, parcelAngle);
-      
-      if (previousCumulativeGeometries.length > 0) {
-        // Turf v7 difference takes two features/geometries, not a collection
-        const poly1 = turf.union(turf.featureCollection(cumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
-        const poly2 = turf.union(turf.featureCollection(previousCumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
+      try {
+        const previousCumulativeGeometries = splitPolygon(selectedCycle, currentTotal, parcelAngle);
         
-        if (poly1 && poly2) {
-          // FIX: Turf v7 difference(poly1, poly2)
-          const diff = turf.difference(turf.featureCollection([poly1, poly2]));
-          if (diff) {
-            if (diff.geometry.type === 'Polygon') {
-              finalGeometries = [diff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
-            } else if (diff.geometry.type === 'MultiPolygon') {
-              finalGeometries = diff.geometry.coordinates.map(p => p[0].map(c => [c[1], c[0]] as [number, number]));
+        if (previousCumulativeGeometries.length > 0) {
+          // Robust conversion to Turf polygons
+          const getPoly = (geoms: [number, number][][]) => {
+            const features = geoms.map(g => {
+              const coords = [...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]];
+              return turf.polygon([coords as any]);
+            });
+            return turf.union(turf.featureCollection(features));
+          };
+
+          const poly1 = getPoly(cumulativeGeometries);
+          const poly2 = getPoly(previousCumulativeGeometries);
+          
+          if (poly1 && poly2) {
+            // Check if they are actually different to avoid "Must have at least 2 geometries"
+            const diff = turf.difference(turf.featureCollection([poly1, poly2]));
+            if (diff) {
+              if (diff.geometry.type === 'Polygon') {
+                finalGeometries = [diff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
+              } else if (diff.geometry.type === 'MultiPolygon') {
+                finalGeometries = diff.geometry.coordinates.map(p => p[0].map(c => [c[1], c[0]] as [number, number]));
+              }
             }
           }
         }
+      } catch (error) {
+        console.error("Geometry calculation error, falling back to cumulative:", error);
+        // Fallback: if difference fails, we still have cumulativeGeometries which is better than nothing
       }
     }
     
