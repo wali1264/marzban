@@ -816,14 +816,14 @@ export default function App() {
 
     const parcelAngle = parcel.angle || 0;
     let currentTotal = 0;
+    let previousCumulativeGeometries: [number, number][][] | null = null;
+
     const newDivisions = updatedDivisions.map(div => {
       // "Water Level" logic: Pour cumulative volume and subtract previous volume
       const cumulativeGeometries = splitPolygon(cycle, div.percentage + currentTotal, div.orientation, parcelAngle);
       let finalGeometries = cumulativeGeometries;
 
-      if (currentTotal > 0) {
-        const previousCumulativeGeometries = splitPolygon(cycle, currentTotal, div.orientation, parcelAngle);
-        
+      if (previousCumulativeGeometries) {
         // Convert geometries to turf features for subtraction
         const poly1 = turf.union(turf.featureCollection(cumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
         const poly2 = turf.union(turf.featureCollection(previousCumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
@@ -840,6 +840,7 @@ export default function App() {
         }
       }
 
+      previousCumulativeGeometries = cumulativeGeometries;
       currentTotal += div.percentage;
       return { ...div, geometry: finalGeometries };
     });

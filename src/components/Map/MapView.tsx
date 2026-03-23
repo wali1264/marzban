@@ -134,7 +134,7 @@ export default function MapView({
   highlightedParcelId = null
 }: MapViewProps) {
   
-  const cycles = findCycles(points, connections);
+  const cycles = useMemo(() => findCycles(points, connections), [points, connections]);
   const [zoom, setZoom] = useState(13);
 
   const trackingTarget = useMemo(() => 
@@ -153,6 +153,15 @@ export default function MapView({
   const longPressTimer = React.useRef<NodeJS.Timeout | null>(null);
 
   // Calculate generations for each cycle/parcel
+  const parcelMap = useMemo(() => {
+    const map = new Map<string, Parcel>();
+    parcels.forEach(p => {
+      const id = [...p.pointIds].sort().join(',');
+      map.set(id, p);
+    });
+    return map;
+  }, [parcels]);
+
   const cyclesWithGen = useMemo(() => {
     const polys = cycles.map(cycle => {
       const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
@@ -178,30 +187,43 @@ export default function MapView({
 
     return polys.map(item => {
       const parcelId = item.cycle.map(p => p.id).sort().join(',');
-      const existingParcel = parcels.find(p => [...p.pointIds].sort().join(',') === parcelId);
+      const existingParcel = parcelMap.get(parcelId);
       
       let gen = existingParcel?.generation;
       
       if (!gen) {
         // Count how many other polygons contain this one
         let containers = 0;
+        const itemCentroid = turf.centroid(item.poly);
+        
         for (const other of polys) {
           if (item === other) continue;
-          // Use a small buffer to handle shared edges
           try {
-            if (turf.booleanContains(other.poly, item.poly)) {
+            // Use centroid check for more robust land division generation detection
+            if (turf.booleanPointInPolygon(itemCentroid, other.poly)) {
               containers++;
             }
           } catch (e) {
-            // Turf might fail on some complex geometries
+            // Fallback
           }
         }
         gen = containers + 1;
       }
       
-      return { ...item, gen, layerId: `layer-gen-${gen}` };
+      // Check if this cycle has children (other cycles contained within it)
+      const hasChildren = polys.some(other => {
+        if (item === other) return false;
+        try {
+          const otherCentroid = turf.centroid(other.poly);
+          return turf.booleanPointInPolygon(otherCentroid, item.poly);
+        } catch (e) {
+          return false;
+        }
+      });
+      
+      return { ...item, gen, hasChildren, layerId: `layer-gen-${gen}` };
     });
-  }, [cycles, connections, parcels]);
+  }, [cycles, connections, parcelMap]);
 
   const visibleConnectionIds = useMemo(() => {
     const ids = new Set<string>();
@@ -273,7 +295,7 @@ export default function MapView({
 
   const renderPolygons = () => {
     return cyclesWithGen.map((item, idx) => {
-      const { cycle, gen, poly } = item;
+      const { cycle, gen, poly, hasChildren } = item;
       
       // Strict generation filtering
       if (gen !== generationFilter) return null;
@@ -281,7 +303,7 @@ export default function MapView({
       const area = calculatePolygonArea(cycle);
       
       const parcelId = cycle.map(p => p.id).sort().join(',');
-      const parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+      const parcel = parcelMap.get(parcelId);
 
       // Visibility logic based on zoom
       const isVisible = zoom > 15;
@@ -289,6 +311,10 @@ export default function MapView({
 
       // If a parcel is highlighted, only show its details
       const shouldShowDetails = !highlightedParcelId || highlightedParcelId === parcel?.id;
+      
+      // Hide area card if the parcel has children (it's a parent in the current view)
+      // This ensures we only see the "active" units for the current generation
+      const showAreaCard = isVisible && shouldShowDetails;
       
       // Calculate centroid for precise positioning
       const centroid = turf.centroid(poly);
@@ -329,7 +355,7 @@ export default function MapView({
             icon={transparentIcon}
             interactive={false}
           >
-            {isVisible && shouldShowDetails && (
+            {showAreaCard && (
               <Tooltip permanent direction="center" className="area-tooltip">
                 <div className="relative flex items-center justify-center">
                   {/* Owner Name Watermark */}
@@ -370,14 +396,7 @@ export default function MapView({
               </Tooltip>
             )}
           </Marker>
-
-          {/* Render Divisions if any */}
-          {parcels.find(p => {
-            const cycleIds = cycle.map(pt => pt.id).sort().join(',');
-            const parcelIds = p.pointIds.sort().join(',');
-            return cycleIds === parcelIds;
-          })?.divisions.map(div => {
-            const parcel = parcels.find(p => p.pointIds.sort().join(',') === cycle.map(pt => pt.id).sort().join(','));
+          {parcel?.divisions.map(div => {
             const center = getMultiCentroid(div.geometry);
             
             return (
