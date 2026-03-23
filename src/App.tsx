@@ -714,36 +714,38 @@ export default function App() {
     }
 
     const currentTotal = existingParcel?.divisions.reduce((sum, d) => sum + d.percentage, 0) || 0;
-    if (currentTotal + percentage > 100.01) { // Small epsilon for float math
-      alert(`خطا: مجموع سهام نمی‌تواند بیش از ۱۰۰٪ باشد. (باقیمانده: ${Math.max(0, 100 - currentTotal).toFixed(1)}٪)`);
+    const remaining = 100 - currentTotal;
+
+    // Use a small epsilon for float precision (0.001%)
+    if (percentage > remaining + 0.001) {
+      const remainingArea = (remaining / 100) * (existingParcel?.area || calculatePolygonArea(selectedCycle));
+      alert(`خطا: مقدار وارد شده از فضای باقی‌مانده بیشتر است.\nباقی‌مانده: ${remaining.toFixed(2)}٪ (${remainingArea.toFixed(1)} متر مربع)`);
       return;
     }
 
-    // For the geometry, we split the *original* cycle but we need to account for previous divisions
-    // A better way is to split the remaining polygon, but for this demo, 
-    // we'll split the original polygon at (currentTotal + percentage) and subtract the previous split.
-    // However, splitPolygon currently returns the *first* part.
-    // Let's refine the logic: we split at currentTotal + percentage to get the "cumulative" polygon,
-    // then we'd ideally subtract the previous cumulative polygon.
-    // For simplicity in this version, we'll just store the cumulative geometry.
-    
     const parcelAngle = existingParcel?.angle || 0;
+    
+    // Calculate the cumulative geometry (from 0 to currentTotal + percentage)
     const cumulativeGeometries = splitPolygon(selectedCycle, percentage + currentTotal, parcelAngle);
     let finalGeometries = cumulativeGeometries;
 
-    if (currentTotal > 0) {
+    if (currentTotal > 0 && cumulativeGeometries.length > 0) {
       const previousCumulativeGeometries = splitPolygon(selectedCycle, currentTotal, parcelAngle);
       
-      const poly1 = turf.union(turf.featureCollection(cumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
-      const poly2 = turf.union(turf.featureCollection(previousCumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
-      
-      if (poly1 && poly2) {
-        const diff = turf.difference(turf.featureCollection([poly1, poly2]));
-        if (diff) {
-          if (diff.geometry.type === 'Polygon') {
-            finalGeometries = [diff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
-          } else if (diff.geometry.type === 'MultiPolygon') {
-            finalGeometries = diff.geometry.coordinates.map(p => p[0].map(c => [c[1], c[0]] as [number, number]));
+      if (previousCumulativeGeometries.length > 0) {
+        // Turf v7 difference takes two features/geometries, not a collection
+        const poly1 = turf.union(turf.featureCollection(cumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
+        const poly2 = turf.union(turf.featureCollection(previousCumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
+        
+        if (poly1 && poly2) {
+          // FIX: Turf v7 difference(poly1, poly2)
+          const diff = turf.difference(turf.featureCollection([poly1, poly2]));
+          if (diff) {
+            if (diff.geometry.type === 'Polygon') {
+              finalGeometries = [diff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
+            } else if (diff.geometry.type === 'MultiPolygon') {
+              finalGeometries = diff.geometry.coordinates.map(p => p[0].map(c => [c[1], c[0]] as [number, number]));
+            }
           }
         }
       }
@@ -1589,30 +1591,67 @@ export default function App() {
               <div className="p-6">
                 {/* AI Suggestion Button */}
                 {selectedCycle && (
-                  <button 
-                    onClick={() => {
-                      const parcelId = selectedCycle.map(p => p.id).sort().join(',');
-                      const p = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
-                      if (p) handleAiConsult(p);
-                      else {
-                         // Create a temporary parcel for AI consult
-                         const tempParcel: Parcel = {
-                           id: 'temp',
-                           name: 'موقت',
-                           pointIds: selectedCycle.map(pt => pt.id),
-                           divisions: [],
-                           area: calculatePolygonArea(selectedCycle),
-                           generation: getGenerationForParcel(selectedCycle.map(pt => pt.id), parcels),
-                           createdAt: Date.now()
-                         };
-                         handleAiConsult(tempParcel);
-                      }
-                    }}
-                    className="w-full mb-6 py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-100"
-                  >
-                    <Activity className="w-4 h-4" />
-                    مشاوره هوشمند تقسیم ارث (AI)
-                  </button>
+                  <div className="mb-6 space-y-4">
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">فضای باقی‌مانده قطعه</span>
+                        <div className="flex items-center gap-1">
+                          <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                          <span className="text-[10px] font-bold text-emerald-600">آماده تقسیم</span>
+                        </div>
+                      </div>
+                      <div className="flex items-baseline justify-between">
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-2xl font-black text-slate-900 tabular-nums">
+                            {(() => {
+                              const parcelId = selectedCycle.map(p => p.id).sort().join(',');
+                              const p = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+                              const currentTotal = p?.divisions.reduce((sum, d) => sum + d.percentage, 0) || 0;
+                              return (100 - currentTotal).toFixed(2);
+                            })()}
+                          </span>
+                          <span className="text-xs font-bold text-slate-400">٪</span>
+                        </div>
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-lg font-bold text-slate-600 tabular-nums">
+                            {(() => {
+                              const parcelId = selectedCycle.map(p => p.id).sort().join(',');
+                              const p = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+                              const area = p?.area || calculatePolygonArea(selectedCycle);
+                              const currentTotal = p?.divisions.reduce((sum, d) => sum + d.percentage, 0) || 0;
+                              return ((100 - currentTotal) / 100 * area).toFixed(1);
+                            })()}
+                          </span>
+                          <span className="text-[10px] font-bold text-slate-400">متر مربع</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <button 
+                      onClick={() => {
+                        const parcelId = selectedCycle.map(p => p.id).sort().join(',');
+                        const p = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+                        if (p) handleAiConsult(p);
+                        else {
+                           // Create a temporary parcel for AI consult
+                           const tempParcel: Parcel = {
+                             id: 'temp',
+                             name: 'موقت',
+                             pointIds: selectedCycle.map(pt => pt.id),
+                             divisions: [],
+                             area: calculatePolygonArea(selectedCycle),
+                             generation: getGenerationForParcel(selectedCycle.map(pt => pt.id), parcels),
+                             createdAt: Date.now()
+                           };
+                           handleAiConsult(tempParcel);
+                        }
+                      }}
+                      className="w-full py-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-100"
+                    >
+                      <Activity className="w-4 h-4" />
+                      مشاوره هوشمند تقسیم ارث (AI)
+                    </button>
+                  </div>
                 )}
 
                 <form onSubmit={(e) => {
