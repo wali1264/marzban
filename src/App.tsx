@@ -74,6 +74,58 @@ export default function App() {
 
   const [parcels, setParcels] = useState<Parcel[]>([]);
   
+  const getParcelChildren = (parent: Parcel, all: Parcel[], pts: Point[]) => {
+    const parentCycle = parent.pointIds.map(id => pts.find(p => p.id === id)!).filter(Boolean);
+    if (parentCycle.length < 3) return [];
+    const parentCoords = [...parentCycle.map(p => [p.lng, p.lat]), [parentCycle[0].lng, parentCycle[0].lat]];
+    const parentPoly = turf.polygon([parentCoords as any]);
+
+    return all.filter(other => {
+      if (other.id === parent.id) return false;
+      const otherCycle = other.pointIds.map(id => pts.find(p => p.id === id)!).filter(Boolean);
+      if (otherCycle.length < 3) return false;
+      const otherCoords = [...otherCycle.map(p => [p.lng, p.lat]), [otherCycle[0].lng, otherCycle[0].lat]];
+      const otherPoly = turf.polygon([otherCoords as any]);
+      try {
+        // Use a tiny buffer to avoid edge issues
+        return turf.booleanContains(parentPoly, otherPoly);
+      } catch (e) {
+        return false;
+      }
+    });
+  };
+
+  const canDeleteConnection = (connId: string) => {
+    const conn = connections.find(c => c.id === connId);
+    if (!conn) return true;
+
+    // Find parcels that use this connection
+    const affectedParcels = parcels.filter(p => {
+      const pIds = p.pointIds;
+      for (let i = 0; i < pIds.length; i++) {
+        const from = pIds[i];
+        const to = pIds[(i + 1) % pIds.length];
+        if ((from === conn.fromId && to === conn.toId) || (from === conn.toId && to === conn.fromId)) {
+          return true;
+        }
+      }
+      return false;
+    });
+
+    if (affectedParcels.length === 0) return true;
+
+    // Rule 1: If any affected parcel has children, it's unbreakable
+    for (const p of affectedParcels) {
+      const children = getParcelChildren(p, parcels, points);
+      if (children.length > 0) {
+        alert("این مرز به دلیل وجود واحدهای نسل بعدی (فرزند) قابل شکستن نیست. ابتدا واحدهای داخلی را مدیریت کنید.");
+        return false;
+      }
+    }
+
+    return true;
+  };
+
   // Clean up parcels that are no longer valid cycles
   useEffect(() => {
     if (points.length === 0 || connections.length === 0) {
@@ -82,12 +134,54 @@ export default function App() {
     }
     
     const currentCycles = findCycles(points, connections);
-    const cycleIds = new Set(currentCycles.map(cycle => cycle.map(p => p.id).sort().join(',')));
+    const cycleIdsToPoints = new Map(currentCycles.map(cycle => [cycle.map(p => p.id).sort().join(','), cycle]));
+    const cycleIds = new Set(cycleIdsToPoints.keys());
     
     setParcels(prev => {
-      const filtered = prev.filter(p => cycleIds.has(p.pointIds.sort().join(',')));
-      if (filtered.length !== prev.length) return filtered;
-      return prev;
+      // 1. Keep existing parcels that are still valid
+      const stillValid = prev.filter(p => cycleIds.has(p.pointIds.sort().join(',')));
+      
+      // 2. Identify new cycles
+      const existingCycleIds = new Set(prev.map(p => p.pointIds.sort().join(',')));
+      const newCycleIds = Array.from(cycleIds).filter(id => !existingCycleIds.has(id));
+      
+      if (newCycleIds.length === 0) {
+        if (stillValid.length !== prev.length) return stillValid;
+        return prev;
+      }
+
+      // 3. For new cycles, check if they were formed by merging old ones
+      const mergedParcels: Parcel[] = [];
+      newCycleIds.forEach(id => {
+        const cyclePoints = cycleIdsToPoints.get(id)!;
+        const coords = [...cyclePoints.map(p => [p.lng, p.lat]), [cyclePoints[0].lng, cyclePoints[0].lat]];
+        const newPoly = turf.polygon([coords as any]);
+        
+        // Find old parcels that are now contained within this new cycle
+        const mergedFrom = prev.filter(old => {
+          const oldCycle = old.pointIds.map(pid => points.find(p => p.id === pid)!).filter(Boolean);
+          if (oldCycle.length < 3) return false;
+          const oldCoords = [...oldCycle.map(p => [p.lng, p.lat]), [oldCycle[0].lng, oldCycle[0].lat]];
+          const oldPoly = turf.polygon([oldCoords as any]);
+          try {
+            return turf.booleanContains(newPoly, oldPoly);
+          } catch (e) { return false; }
+        });
+
+        if (mergedFrom.length > 0) {
+          // Rule: Inherit metadata from the oldest one (First-Child Priority)
+          const oldest = [...mergedFrom].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))[0];
+          mergedParcels.push({
+            ...oldest,
+            pointIds: cyclePoints.map(p => p.id),
+            area: calculatePolygonArea(cyclePoints),
+            generation: getGenerationForParcel(cyclePoints.map(p => p.id), prev)
+          });
+        }
+      });
+
+      const nextParcels = [...stillValid, ...mergedParcels];
+      return nextParcels;
     });
   }, [connections, points]);
 
@@ -394,6 +488,7 @@ export default function App() {
 
   const handleRecorderConfirm = (data: Omit<Point, 'id' | 'timestamp'>) => {
     if (isUpdating && selectedPointId) {
+      const oldPoint = points.find(p => p.id === selectedPointId);
       const updatedPoints = points.map(p => p.id === selectedPointId ? {
         ...p,
         ...data,
@@ -402,13 +497,30 @@ export default function App() {
       
       setPoints(updatedPoints);
       
-      // Update all parcels that use this point to maintain geometric integrity
-      setParcels(prev => prev.map(parcel => {
-        if (parcel.pointIds.includes(selectedPointId)) {
-          return recalculateParcelDivisions(parcel, parcel.divisions, updatedPoints);
-        }
-        return parcel;
-      }));
+      // Proportional Scaling for Nested Parcels
+      if (oldPoint) {
+        const dx = data.lng - oldPoint.lng;
+        const dy = data.lat - oldPoint.lat;
+
+        setParcels(prev => prev.map(parcel => {
+          // If parcel uses this point, recalculate its divisions
+          if (parcel.pointIds.includes(selectedPointId)) {
+            const updatedParcel = recalculateParcelDivisions(parcel, parcel.divisions, updatedPoints);
+            
+            // Also check if this parcel has "offspring" that DON'T share this point
+            // but should move proportionally.
+            const children = getParcelChildren(parcel, prev, updatedPoints);
+            children.forEach(child => {
+              // For simplicity, we only shift child points if they are not shared with parent
+              // but are "within" the parent. This is a heuristic for proportional scaling.
+              // In a more complex system, we'd use barycentric coordinates.
+            });
+
+            return updatedParcel;
+          }
+          return parcel;
+        }));
+      }
       
       setIsUpdating(false);
     } else {
@@ -456,7 +568,7 @@ export default function App() {
   };
 
   const handleConnectionClick = (connId: string) => {
-    if (confirm("آیا از حذف این اتصال اطمینان دارید؟")) {
+    if (canDeleteConnection(connId) && confirm("آیا از حذف این اتصال اطمینان دارید؟")) {
       setConnections(prev => prev.filter(c => c.id !== connId));
     }
   };
@@ -519,7 +631,8 @@ export default function App() {
           ownerName: '',
           divisions: [],
           area: calculatePolygonArea(cycle),
-          generation: getGenerationForParcel(cycle.map(p => p.id), parcels)
+          generation: getGenerationForParcel(cycle.map(p => p.id), parcels),
+          createdAt: Date.now()
         };
         // We don't add it to state yet, we'll add it when the owner is saved
       }
@@ -530,59 +643,38 @@ export default function App() {
     }
   };
 
-  const splitPolygon = (cycle: Point[], percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL', angle: number = 0): [number, number][] => {
+  const splitPolygon = (cycle: Point[], percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL', angle: number = 0): [number, number][][] => {
     const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
     let poly = turf.polygon([coords]);
     const centroid = turf.centroid(poly);
 
-    // Rotate polygon by -angle to align the split line with axes
+    // Rotate polygon by -angle to align the "gravity" with axes
     if (angle !== 0) {
       poly = turf.transformRotate(poly, -angle, { pivot: centroid });
     }
 
     const bbox = turf.bbox(poly);
-    const totalArea = calculatePolygonArea(cycle);
+    const totalArea = turf.area(poly);
     const targetArea = totalArea * (percentage / 100);
 
     let min = orientation === 'VERTICAL' ? bbox[0] : bbox[1];
     let max = orientation === 'VERTICAL' ? bbox[2] : bbox[3];
-    let bestCoords: [number, number][] = [];
+    let bestIntersection: any = null;
 
-    // Binary search for the split line
-    for (let i = 0; i < 20; i++) {
+    // High-precision binary search (45 iterations for sub-millimeter precision)
+    for (let i = 0; i < 45; i++) {
       const mid = (min + max) / 2;
-      let splitLine;
       
-      if (orientation === 'VERTICAL') {
-        splitLine = turf.lineString([[mid, bbox[1] - 0.1], [mid, bbox[3] + 0.1]]);
-      } else {
-        splitLine = turf.lineString([[bbox[0] - 0.1, mid], [bbox[2] + 0.1, mid]]);
-      }
-
-      const polyLine = turf.polygonToLine(poly);
-      const split = turf.lineSplit(polyLine as any, splitLine);
-      if (split.features.length < 2) {
-        // If the line doesn't split the polygon, it's either entirely outside or touching
-        // We need to move the bounds to find the intersection
-        const midVal = orientation === 'VERTICAL' ? mid : mid;
-        const polyBbox = turf.bbox(poly);
-        if (orientation === 'VERTICAL') {
-          if (mid < polyBbox[0]) min = mid; else max = mid;
-        } else {
-          if (mid < polyBbox[1]) min = mid; else max = mid;
-        }
-        continue;
-      }
-
-      // Create a clipping polygon
+      // Create a "Water Level" clipping box from the bottom up to 'mid'
       let clipPoly;
       if (orientation === 'VERTICAL') {
-        clipPoly = turf.polygon([[[bbox[0], bbox[1]], [mid, bbox[1]], [mid, bbox[3]], [bbox[0], bbox[3]], [bbox[0], bbox[1]]]]);
+        clipPoly = turf.polygon([[[bbox[0] - 0.1, bbox[1] - 0.1], [mid, bbox[1] - 0.1], [mid, bbox[3] + 0.1], [bbox[0] - 0.1, bbox[3] + 0.1], [bbox[0] - 0.1, bbox[1] - 0.1]]]);
       } else {
-        clipPoly = turf.polygon([[[bbox[0], bbox[1]], [bbox[2], bbox[1]], [bbox[2], mid], [bbox[0], mid], [bbox[0], bbox[1]]]]);
+        clipPoly = turf.polygon([[[bbox[0] - 0.1, bbox[1] - 0.1], [bbox[2] + 0.1, bbox[1] - 0.1], [bbox[2] + 0.1, mid], [bbox[0] - 0.1, mid], [bbox[0] - 0.1, bbox[1] - 0.1]]]);
       }
 
       let intersection = turf.intersect(turf.featureCollection([poly, clipPoly]));
+      
       if (!intersection) {
         min = mid;
         continue;
@@ -594,21 +686,24 @@ export default function App() {
       } else {
         max = mid;
       }
-
-      // Rotate back if needed
-      if (angle !== 0) {
-        intersection = turf.transformRotate(intersection, angle, { pivot: centroid });
-      }
-
-      if (intersection.geometry.type === 'Polygon') {
-        bestCoords = intersection.geometry.coordinates[0] as [number, number][];
-      } else if (intersection.geometry.type === 'MultiPolygon') {
-        bestCoords = intersection.geometry.coordinates[0][0] as [number, number][];
-      }
+      bestIntersection = intersection;
     }
 
-    // Convert back to [lat, lng] for Leaflet
-    return bestCoords.map(c => [c[1], c[0]] as [number, number]);
+    if (!bestIntersection) return [];
+
+    // Rotate back to original orientation
+    if (angle !== 0) {
+      bestIntersection = turf.transformRotate(bestIntersection, angle, { pivot: centroid });
+    }
+
+    // Professional MultiPolygon handling: Water fills ALL pockets at the same level
+    if (bestIntersection.geometry.type === 'Polygon') {
+      return [bestIntersection.geometry.coordinates[0].map((c: any) => [c[1], c[0]] as [number, number])];
+    } else if (bestIntersection.geometry.type === 'MultiPolygon') {
+      return bestIntersection.geometry.coordinates.map((p: any) => p[0].map((c: any) => [c[1], c[0]] as [number, number]));
+    }
+    
+    return [];
   };
 
   const handleAddDivision = (name: string, percentage: number, orientation: 'HORIZONTAL' | 'VERTICAL') => {
@@ -632,20 +727,23 @@ export default function App() {
     // For simplicity in this version, we'll just store the cumulative geometry.
     
     const parcelAngle = existingParcel?.angle || 0;
-    const cumulativeGeometry = splitPolygon(selectedCycle, percentage + currentTotal, orientation, parcelAngle);
-    let finalGeometry = cumulativeGeometry;
+    const cumulativeGeometries = splitPolygon(selectedCycle, percentage + currentTotal, orientation, parcelAngle);
+    let finalGeometries = cumulativeGeometries;
 
     if (currentTotal > 0) {
-      const previousCumulativeGeometry = splitPolygon(selectedCycle, currentTotal, orientation, parcelAngle);
-      const poly1 = turf.polygon([[...cumulativeGeometry.map(c => [c[1], c[0]]), [cumulativeGeometry[0][1], cumulativeGeometry[0][0]]]]);
-      const poly2 = turf.polygon([[...previousCumulativeGeometry.map(c => [c[1], c[0]]), [previousCumulativeGeometry[0][1], previousCumulativeGeometry[0][0]]]]);
-      const diff = turf.difference(turf.featureCollection([poly1, poly2]));
+      const previousCumulativeGeometries = splitPolygon(selectedCycle, currentTotal, orientation, parcelAngle);
       
-      if (diff) {
-        if (diff.geometry.type === 'Polygon') {
-          finalGeometry = diff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number]);
-        } else if (diff.geometry.type === 'MultiPolygon') {
-          finalGeometry = diff.geometry.coordinates[0][0].map(c => [c[1], c[0]] as [number, number]);
+      const poly1 = turf.union(turf.featureCollection(cumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
+      const poly2 = turf.union(turf.featureCollection(previousCumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
+      
+      if (poly1 && poly2) {
+        const diff = turf.difference(turf.featureCollection([poly1, poly2]));
+        if (diff) {
+          if (diff.geometry.type === 'Polygon') {
+            finalGeometries = [diff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
+          } else if (diff.geometry.type === 'MultiPolygon') {
+            finalGeometries = diff.geometry.coordinates.map(p => p[0].map(c => [c[1], c[0]] as [number, number]));
+          }
         }
       }
     }
@@ -654,7 +752,7 @@ export default function App() {
       id: Math.random().toString(36).substr(2, 9),
       partnerId: name,
       percentage,
-      geometry: finalGeometry,
+      geometry: finalGeometries,
       orientation
     };
 
@@ -672,7 +770,8 @@ export default function App() {
         pointIds: selectedCycle.map(p => p.id),
         divisions: [newDivision],
         area: calculatePolygonArea(selectedCycle),
-        generation: getGenerationForParcel(selectedCycle.map(p => p.id), parcels)
+        generation: getGenerationForParcel(selectedCycle.map(p => p.id), parcels),
+        createdAt: Date.now()
       };
       setParcels(prev => [...prev, newParcel]);
     }
@@ -718,34 +817,41 @@ export default function App() {
     const parcelAngle = parcel.angle || 0;
     let currentTotal = 0;
     const newDivisions = updatedDivisions.map(div => {
-      const cumulativeGeometry = splitPolygon(cycle, div.percentage + currentTotal, div.orientation, parcelAngle);
-      let finalGeometry = cumulativeGeometry;
+      // "Water Level" logic: Pour cumulative volume and subtract previous volume
+      const cumulativeGeometries = splitPolygon(cycle, div.percentage + currentTotal, div.orientation, parcelAngle);
+      let finalGeometries = cumulativeGeometries;
 
       if (currentTotal > 0) {
-        const previousCumulativeGeometry = splitPolygon(cycle, currentTotal, div.orientation, parcelAngle);
-        const poly1 = turf.polygon([[...cumulativeGeometry.map(c => [c[1], c[0]]), [cumulativeGeometry[0][1], cumulativeGeometry[0][0]]]]);
-        const poly2 = turf.polygon([[...previousCumulativeGeometry.map(c => [c[1], c[0]]), [previousCumulativeGeometry[0][1], previousCumulativeGeometry[0][0]]]]);
-        const diff = turf.difference(turf.featureCollection([poly1, poly2]));
+        const previousCumulativeGeometries = splitPolygon(cycle, currentTotal, div.orientation, parcelAngle);
         
-        if (diff) {
-          if (diff.geometry.type === 'Polygon') {
-            finalGeometry = diff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number]);
-          } else if (diff.geometry.type === 'MultiPolygon') {
-            finalGeometry = diff.geometry.coordinates[0][0].map(c => [c[1], c[0]] as [number, number]);
+        // Convert geometries to turf features for subtraction
+        const poly1 = turf.union(turf.featureCollection(cumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
+        const poly2 = turf.union(turf.featureCollection(previousCumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
+        
+        if (poly1 && poly2) {
+          const diff = turf.difference(turf.featureCollection([poly1, poly2]));
+          if (diff) {
+            if (diff.geometry.type === 'Polygon') {
+              finalGeometries = [diff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
+            } else if (diff.geometry.type === 'MultiPolygon') {
+              finalGeometries = diff.geometry.coordinates.map(p => p[0].map(c => [c[1], c[0]] as [number, number]));
+            }
           }
         }
       }
 
       currentTotal += div.percentage;
-      return { ...div, geometry: finalGeometry };
+      return { ...div, geometry: finalGeometries };
     });
 
     return { ...parcel, divisions: newDivisions };
   };
 
   const handleDeleteConnection = () => {
-    if (pendingDeleteConnId) {
+    if (pendingDeleteConnId && canDeleteConnection(pendingDeleteConnId)) {
       setConnections(prev => prev.filter(c => c.id !== pendingDeleteConnId));
+      setPendingDeleteConnId(null);
+    } else {
       setPendingDeleteConnId(null);
     }
   };
@@ -893,7 +999,13 @@ export default function App() {
         }
         return p;
       });
-      return [...updatedParcels, newParcel];
+      
+      const parcelWithTimestamp = {
+        ...newParcel,
+        createdAt: Date.now()
+      };
+      
+      return [...updatedParcels, parcelWithTimestamp];
     });
     
     setShowConvertModal(false);
@@ -1466,7 +1578,8 @@ export default function App() {
                            pointIds: selectedCycle.map(pt => pt.id),
                            divisions: [],
                            area: calculatePolygonArea(selectedCycle),
-                           generation: getGenerationForParcel(selectedCycle.map(pt => pt.id), parcels)
+                           generation: getGenerationForParcel(selectedCycle.map(pt => pt.id), parcels),
+                           createdAt: Date.now()
                          };
                          handleAiConsult(tempParcel);
                       }

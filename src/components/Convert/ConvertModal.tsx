@@ -28,11 +28,13 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
       // We need to check if any of these coordinates already match existing points
       // within a very small threshold (e.g., 1cm)
       
-      division.geometry.forEach((coord, index) => {
+      const firstPart = division.geometry[0] || [];
+      
+      firstPart.forEach((coord, index) => {
         // Skip the last point if it's the same as the first (closed loop)
-        if (index === division.geometry.length - 1 && 
-            coord[0] === division.geometry[0][0] && 
-            coord[1] === division.geometry[0][1]) {
+        if (index === firstPart.length - 1 && 
+            coord[0] === firstPart[0][0] && 
+            coord[1] === firstPart[0][1]) {
           return;
         }
 
@@ -61,15 +63,18 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
         }
       });
 
-      const lngLatCoords = division.geometry.map(c => [c[1], c[0]]);
+      const allPolygons = division.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
+      const totalArea = turf.area(turf.featureCollection(allPolygons));
+
       const newParcel: Parcel = {
         id: Math.random().toString(36).substr(2, 9),
         name: `قطعه تفکیکی از ${parcel.ownerName || 'زمین اصلی'}`,
         pointIds: newPointIds,
         divisions: [],
-        area: turf.area(turf.polygon([lngLatCoords])),
+        area: totalArea,
         ownerName: parcel.ownerName, // Carry over owner if exists
-        generation: (parcel.generation || 1) + 1
+        generation: (parcel.generation || 1) + 1,
+        createdAt: Date.now()
       };
 
       onConvert(newPoints, newParcel);
@@ -108,7 +113,11 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-500">مساحت سهم:</span>
                   <span className="font-bold text-slate-900">
-                    {Math.round(turf.area(turf.polygon([division.geometry.map(c => [c[1], c[0]])]))).toLocaleString()} متر مربع
+                    {(() => {
+                      const allPolygons = division.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
+                      const area = turf.area(turf.featureCollection(allPolygons));
+                      return Math.round(area).toLocaleString();
+                    })()} متر مربع
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
@@ -117,7 +126,7 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-500">تعداد رئوس:</span>
-                  <span className="font-bold text-slate-900">{division.geometry.length - 1} نقطه</span>
+                  <span className="font-bold text-slate-900">{division.geometry.reduce((sum, g) => sum + g.length - 1, 0)} نقطه</span>
                 </div>
               </div>
 

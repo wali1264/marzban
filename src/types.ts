@@ -34,7 +34,7 @@ export interface Division {
   id: string;
   partnerId: string;
   percentage: number;
-  geometry: [number, number][]; // Coordinates of the sub-polygon
+  geometry: [number, number][][]; // Coordinates of the sub-polygons (MultiPolygon support)
   orientation: 'HORIZONTAL' | 'VERTICAL';
 }
 
@@ -47,6 +47,7 @@ export interface Parcel {
   ownerName?: string;
   angle?: number; // Rotation angle for divisions in degrees
   generation?: number; // 1 for root, 2 for nested, etc.
+  createdAt: number;
 }
 
 export interface GNSSConfig {

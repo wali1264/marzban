@@ -102,6 +102,17 @@ function MapEvents({ onMapClick, onZoomEnd }: { onMapClick: (lat: number, lng: n
   return null;
 }
 
+function getMultiCentroid(geometries: [number, number][][]): [number, number] {
+  if (geometries.length === 0) return [0, 0];
+  if (geometries.length === 1) return getCentroid(geometries[0].map(([lat, lng]) => ({ lat, lng } as Point)));
+  
+  // For multi-polygons, use turf to find the centroid of the collection
+  const features = geometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
+  const collection = turf.featureCollection(features);
+  const centroid = turf.centroid(collection);
+  return [centroid.geometry.coordinates[1], centroid.geometry.coordinates[0]];
+}
+
 export default function MapView({ 
   points, 
   connections, 
@@ -367,40 +378,47 @@ export default function MapView({
             return cycleIds === parcelIds;
           })?.divisions.map(div => {
             const parcel = parcels.find(p => p.pointIds.sort().join(',') === cycle.map(pt => pt.id).sort().join(','));
+            const center = getMultiCentroid(div.geometry);
+            
             return (
-              <Polygon
-                key={div.id}
-                positions={div.geometry}
-                pathOptions={{
-                  color: '#0ea5e9',
-                  fillColor: '#0ea5e9',
-                  fillOpacity: 0.2,
-                  weight: 2,
-                  dashArray: '5, 5'
-                }}
-                eventHandlers={{
-                  click: (e) => {
-                    if (mode === 'CONVERT' && onDivisionClick && parcel) {
-                      L.DomEvent.stopPropagation(e);
-                      onDivisionClick(parcel.id, div.id);
-                    }
-                  },
-                  mousedown: () => handleLongPressStart(() => parcel && onDivisionLongPress?.(parcel.id, div.id)),
-                  mouseup: handleLongPressEnd,
-                  touchstart: () => handleLongPressStart(() => parcel && onDivisionLongPress?.(parcel.id, div.id)),
-                  touchend: handleLongPressEnd,
-                  contextmenu: (e) => {
-                    L.DomEvent.stopPropagation(e);
-                    parcel && onDivisionLongPress?.(parcel.id, div.id);
-                  }
-                }}
-              >
-                 <Tooltip permanent direction="center">
-                  <div className="bg-white/80 px-1 rounded text-[8px] font-bold text-blue-700">
-                    {div.percentage}%
-                  </div>
-                </Tooltip>
-              </Polygon>
+              <React.Fragment key={div.id}>
+                {div.geometry.map((polyCoords, pIdx) => (
+                  <Polygon
+                    key={`${div.id}-${pIdx}`}
+                    positions={polyCoords}
+                    pathOptions={{
+                      color: '#0ea5e9',
+                      fillColor: '#0ea5e9',
+                      fillOpacity: 0.2,
+                      weight: 2,
+                      dashArray: '5, 5'
+                    }}
+                    eventHandlers={{
+                      click: (e) => {
+                        if (mode === 'CONVERT' && onDivisionClick && parcel) {
+                          L.DomEvent.stopPropagation(e);
+                          onDivisionClick(parcel.id, div.id);
+                        }
+                      },
+                      mousedown: () => handleLongPressStart(() => parcel && onDivisionLongPress?.(parcel.id, div.id)),
+                      mouseup: handleLongPressEnd,
+                      touchstart: () => handleLongPressStart(() => parcel && onDivisionLongPress?.(parcel.id, div.id)),
+                      touchend: handleLongPressEnd,
+                      contextmenu: (e) => {
+                        L.DomEvent.stopPropagation(e);
+                        parcel && onDivisionLongPress?.(parcel.id, div.id);
+                      }
+                    }}
+                  />
+                ))}
+                <Marker position={center} icon={transparentIcon} interactive={false}>
+                  <Tooltip permanent direction="center">
+                    <div className="bg-white/80 px-1 rounded text-[8px] font-bold text-blue-700">
+                      {div.percentage}%
+                    </div>
+                  </Tooltip>
+                </Marker>
+              </React.Fragment>
             );
           })}
         </React.Fragment>

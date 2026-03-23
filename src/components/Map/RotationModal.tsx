@@ -1,6 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, useDragControls } from 'framer-motion';
-import { X, GripHorizontal, RotateCcw, Info } from 'lucide-react';
+import { 
+  X, 
+  GripHorizontal, 
+  RotateCcw, 
+  Info, 
+  ChevronLeft, 
+  ChevronRight, 
+  ChevronsLeft, 
+  ChevronsRight, 
+  Plus, 
+  Minus 
+} from 'lucide-react';
 import { cn } from '../../utils';
 
 interface RotationModalProps {
@@ -18,74 +29,14 @@ export const RotationModal: React.FC<RotationModalProps> = ({
   onAngleChange,
   parcelName
 }) => {
-  const [isDragging, setIsDragging] = useState(false);
-  const dialRef = useRef<HTMLDivElement>(null);
   const dragControls = useDragControls();
 
-  const handleDialInteraction = (e: React.MouseEvent | React.TouchEvent | MouseEvent | TouchEvent) => {
-    if (!dialRef.current) return;
-
-    const rect = dialRef.current.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-
-    let clientX, clientY;
-    if ('touches' in e) {
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else {
-      clientX = (e as MouseEvent).clientX;
-      clientY = (e as MouseEvent).clientY;
-    }
-
-    const dx = clientX - centerX;
-    const dy = clientY - centerY;
-    
-    // Calculate angle in degrees
-    let newAngle = Math.atan2(dy, dx) * (180 / Math.PI);
-    
-    // Normalize to 0-360
-    newAngle = (newAngle + 360) % 360;
-    
-    // Round to nearest degree
-    onAngleChange(Math.round(newAngle));
+  const updateAngle = (delta: number) => {
+    let newAngle = (angle + delta) % 360;
+    if (newAngle < 0) newAngle += 360;
+    // Round to 1 decimal place to avoid float precision issues
+    onAngleChange(Math.round(newAngle * 10) / 10);
   };
-
-  const onMouseDown = (e: React.MouseEvent) => {
-    setIsDragging(true);
-    handleDialInteraction(e);
-  };
-
-  const onTouchStart = (e: React.TouchEvent) => {
-    setIsDragging(true);
-    handleDialInteraction(e);
-  };
-
-  useEffect(() => {
-    const handleMove = (e: MouseEvent | TouchEvent) => {
-      if (isDragging) {
-        handleDialInteraction(e);
-      }
-    };
-
-    const handleUp = () => {
-      setIsDragging(false);
-    };
-
-    if (isDragging) {
-      window.addEventListener('mousemove', handleMove);
-      window.addEventListener('mouseup', handleUp);
-      window.addEventListener('touchmove', handleMove);
-      window.addEventListener('touchend', handleUp);
-    }
-
-    return () => {
-      window.removeEventListener('mousemove', handleMove);
-      window.removeEventListener('mouseup', handleUp);
-      window.removeEventListener('touchmove', handleMove);
-      window.removeEventListener('touchend', handleUp);
-    };
-  }, [isDragging]);
 
   if (!isOpen) return null;
 
@@ -98,98 +49,137 @@ export const RotationModal: React.FC<RotationModalProps> = ({
       initial={{ opacity: 0, scale: 0.9, y: 20 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.9, y: 20 }}
-      className="fixed bottom-24 left-4 z-[2000] w-36 bg-white rounded-[24px] shadow-2xl border border-slate-200 overflow-hidden"
+      className="fixed bottom-24 left-4 z-[2000] w-64 bg-white rounded-[32px] shadow-2xl border border-slate-200 overflow-hidden"
     >
       {/* Header / Drag Handle */}
       <div 
         onPointerDown={(e) => dragControls.start(e)}
-        className="bg-slate-50 px-2 py-1.5 border-b border-slate-200 flex items-center justify-between cursor-grab active:cursor-grabbing"
+        className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex items-center justify-between cursor-grab active:cursor-grabbing"
       >
-        <div className="flex items-center gap-1">
-          <RotateCcw className="w-3 h-3 text-amber-600" />
-          <span className="text-[9px] font-bold text-slate-700">تنظیم زاویه</span>
+        <div className="flex items-center gap-2">
+          <div className="bg-amber-100 p-1.5 rounded-xl">
+            <RotateCcw className="w-4 h-4 text-amber-600" />
+          </div>
+          <span className="text-xs font-black text-slate-800">تنظیم دقیق زاویه</span>
         </div>
-        <GripHorizontal className="w-3 h-3 text-slate-400" />
+        <GripHorizontal className="w-4 h-4 text-slate-400" />
       </div>
 
-      <div className="p-3 flex flex-col items-center gap-3">
+      <div className="p-5 flex flex-col gap-5">
         {parcelName ? (
-          <div className="text-center">
-            <p className="text-[7px] text-slate-400 uppercase tracking-wider mb-0.5">قطعه انتخاب شده</p>
-            <p className="text-[10px] font-bold text-slate-800 truncate max-w-[110px]">{parcelName}</p>
+          <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-1">قطعه در حال ویرایش</p>
+            <p className="text-xs font-black text-slate-900 truncate">{parcelName}</p>
           </div>
         ) : (
-          <div className="flex items-center gap-1 px-1.5 py-1 bg-amber-50 rounded-lg text-amber-700">
-            <Info className="w-2.5 h-2.5" />
-            <p className="text-[7px] font-medium leading-tight">روی یک قطعه کلیک کنید.</p>
+          <div className="flex items-center gap-2 p-3 bg-amber-50 rounded-2xl text-amber-700 border border-amber-100">
+            <Info className="w-4 h-4 shrink-0" />
+            <p className="text-[10px] font-bold leading-tight">لطفاً برای تنظیم زاویه، روی یک قطعه در نقشه کلیک کنید.</p>
           </div>
         )}
 
-        {/* Dial Interface */}
-        <div className="relative w-12 h-12 flex items-center justify-center">
-          {/* Outer Ring */}
-          <div className="absolute inset-0 rounded-full border border-slate-100 shadow-inner" />
-          
-          {/* Degree Markers */}
-          {[...Array(8)].map((_, i) => (
-            <div 
-              key={i}
-              className="absolute w-0.5 h-0.5 bg-slate-200 rounded-full"
-              style={{ 
-                transform: `rotate(${i * 45}deg) translateY(-22px)` 
-              }}
-            />
-          ))}
+        {/* Precise Controls */}
+        <div className="flex flex-col gap-4">
+          {/* Numeric Display */}
+          <div className="flex items-center justify-center gap-3">
+            <div className="relative group">
+              <input 
+                type="number"
+                step="0.1"
+                value={angle}
+                onChange={(e) => {
+                  let val = parseFloat(e.target.value);
+                  if (isNaN(val)) return;
+                  
+                  // Normalize to 0-360 range
+                  let normalized = val % 360;
+                  if (normalized < 0) normalized += 360;
+                  
+                  onAngleChange(Math.round(normalized * 10) / 10);
+                }}
+                className="w-24 text-center text-2xl font-black bg-slate-50 border-2 border-slate-100 rounded-2xl py-2 focus:border-amber-500 focus:outline-none transition-all tabular-nums"
+              />
+              <span className="absolute -right-6 top-1/2 -translate-y-1/2 text-xl font-black text-slate-300">°</span>
+            </div>
+          </div>
 
-          {/* Interactive Dial Area */}
-          <div 
-            ref={dialRef}
-            onMouseDown={onMouseDown}
-            onTouchStart={onTouchStart}
-            className="relative w-10 h-10 rounded-full bg-white shadow-sm border border-slate-100 flex items-center justify-center cursor-pointer group active:scale-95 transition-transform"
-          >
-            {/* Center Point */}
-            <div className="w-0.5 h-0.5 bg-slate-300 rounded-full z-10" />
-            
-            {/* Needle */}
-            <div 
-              className="absolute top-1/2 left-1/2 w-0.5 h-4 bg-amber-500 origin-top rounded-full shadow-sm"
-              style={{ 
-                transform: `translate(-50%, -100%) rotate(${angle}deg)`,
-                transition: isDragging ? 'none' : 'transform 0.2s ease-out'
-              }}
-            >
-              <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-1 bg-amber-600 rounded-full border border-white shadow-sm" />
+          {/* Adjustment Buttons Grid */}
+          <div className="grid grid-cols-2 gap-3">
+            {/* Decrease Column */}
+            <div className="flex flex-col gap-2">
+              <button 
+                onClick={() => updateAngle(-10)}
+                className="flex items-center justify-between px-3 py-2 bg-rose-50 text-rose-600 rounded-xl hover:bg-rose-100 transition-colors group"
+              >
+                <ChevronsLeft className="w-4 h-4 group-active:-translate-x-1 transition-transform" />
+                <span className="text-[10px] font-black">۱۰-</span>
+              </button>
+              <button 
+                onClick={() => updateAngle(-1)}
+                className="flex items-center justify-between px-3 py-2 bg-rose-50 text-rose-600 rounded-xl hover:bg-rose-100 transition-colors group"
+              >
+                <ChevronLeft className="w-4 h-4 group-active:-translate-x-1 transition-transform" />
+                <span className="text-[10px] font-black">۱-</span>
+              </button>
+              <button 
+                onClick={() => updateAngle(-0.1)}
+                className="flex items-center justify-between px-3 py-2 bg-rose-50 text-rose-600 rounded-xl hover:bg-rose-100 transition-colors group"
+              >
+                <Minus className="w-4 h-4 group-active:scale-90 transition-transform" />
+                <span className="text-[10px] font-black">۰.۱-</span>
+              </button>
             </div>
 
-            {/* Angle Display in Dial */}
-            <div className="absolute -bottom-5 text-center">
-              <span className="text-[9px] font-black text-slate-800 tabular-nums">{angle}°</span>
+            {/* Increase Column */}
+            <div className="flex flex-col gap-2">
+              <button 
+                onClick={() => updateAngle(10)}
+                className="flex items-center justify-between px-3 py-2 bg-emerald-50 text-emerald-600 rounded-xl hover:bg-emerald-100 transition-colors group"
+              >
+                <span className="text-[10px] font-black">۱۰+</span>
+                <ChevronsRight className="w-4 h-4 group-active:translate-x-1 transition-transform" />
+              </button>
+              <button 
+                onClick={() => updateAngle(1)}
+                className="flex items-center justify-between px-3 py-2 bg-emerald-50 text-emerald-600 rounded-xl hover:bg-emerald-100 transition-colors group"
+              >
+                <span className="text-[10px] font-black">۱+</span>
+                <ChevronRight className="w-4 h-4 group-active:translate-x-1 transition-transform" />
+              </button>
+              <button 
+                onClick={() => updateAngle(0.1)}
+                className="flex items-center justify-between px-3 py-2 bg-emerald-50 text-emerald-600 rounded-xl hover:bg-emerald-100 transition-colors group"
+              >
+                <span className="text-[10px] font-black">۰.۱+</span>
+                <Plus className="w-4 h-4 group-active:scale-110 transition-transform" />
+              </button>
             </div>
           </div>
         </div>
 
-        <div className="w-full grid grid-cols-2 gap-1 mt-2">
-          {[0, 90].map(val => (
-            <button
-              key={val}
-              onClick={() => onAngleChange(val)}
-              className={cn(
-                "py-1 rounded-lg text-[8px] font-bold transition-all",
-                angle === val ? "bg-amber-600 text-white shadow-sm" : "bg-slate-50 text-slate-600 hover:bg-slate-100"
-              )}
-            >
-              {val}°
-            </button>
-          ))}
+        {/* Presets & Close */}
+        <div className="flex flex-col gap-2 pt-2 border-t border-slate-100">
+          <div className="grid grid-cols-2 gap-2">
+            {[0, 90].map(val => (
+              <button
+                key={val}
+                onClick={() => onAngleChange(val)}
+                className={cn(
+                  "py-2 rounded-xl text-[10px] font-black transition-all",
+                  angle === val ? "bg-amber-600 text-white shadow-lg shadow-amber-100" : "bg-slate-50 text-slate-600 hover:bg-slate-100"
+                )}
+              >
+                {val === 0 ? 'افقی (۰°)' : 'عمودی (۹۰°)'}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={onClose}
+            className="w-full py-3 bg-slate-900 text-white rounded-2xl text-xs font-black shadow-xl hover:bg-black transition-all active:scale-95 mt-1"
+          >
+            تایید و بستن
+          </button>
         </div>
-
-        <button
-          onClick={onClose}
-          className="w-full py-1.5 bg-slate-800 text-white rounded-lg text-[9px] font-bold shadow-md hover:bg-slate-900 transition-all active:scale-95"
-        >
-          بستن
-        </button>
       </div>
     </motion.div>
   );
