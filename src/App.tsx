@@ -749,33 +749,37 @@ export default function App() {
         const previousCumulativeGeometries = splitPolygon(selectedCycle, currentTotal, parcelAngle);
         
         if (previousCumulativeGeometries.length > 0) {
-          // Robust conversion to Turf polygons
+          // Robust conversion to Turf polygons with buffer(0) for precision cleaning
           const getPoly = (geoms: [number, number][][]) => {
             const features = geoms.map(g => {
               const coords = [...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]];
               return turf.polygon([coords as any]);
             });
-            return turf.union(turf.featureCollection(features));
+            const union = turf.union(turf.featureCollection(features));
+            return union ? turf.buffer(union, 0) : null; // Clean geometry
           };
 
           const poly1 = getPoly(cumulativeGeometries);
           const poly2 = getPoly(previousCumulativeGeometries);
           
           if (poly1 && poly2) {
-            // Check if they are actually different to avoid "Must have at least 2 geometries"
+            // Use a tiny buffer to ensure clean overlap for difference
             const diff = turf.difference(turf.featureCollection([poly1, poly2]));
             if (diff) {
-              if (diff.geometry.type === 'Polygon') {
-                finalGeometries = [diff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
-              } else if (diff.geometry.type === 'MultiPolygon') {
-                finalGeometries = diff.geometry.coordinates.map(p => p[0].map(c => [c[1], c[0]] as [number, number]));
+              const cleanDiff = turf.buffer(diff, 0);
+              if (cleanDiff) {
+                if (cleanDiff.geometry.type === 'Polygon') {
+                  finalGeometries = [cleanDiff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
+                } else if (cleanDiff.geometry.type === 'MultiPolygon') {
+                  finalGeometries = cleanDiff.geometry.coordinates.map(p => p[0].map(c => [c[1], c[0]] as [number, number]));
+                }
               }
             }
           }
         }
       } catch (error) {
-        console.error("Geometry calculation error, falling back to cumulative:", error);
-        // Fallback: if difference fails, we still have cumulativeGeometries which is better than nothing
+        console.error("Geometry precision error:", error);
+        // If precision fails, we still use the same Turf-based cumulative logic to maintain consistency
       }
     }
     
@@ -1015,50 +1019,34 @@ export default function App() {
   };
 
   const handleConvertShare = (newPoints: Point[], newParcel: Parcel) => {
-    // Add new points
+    // Add new points without removing old ones to preserve Gen 1
     setPoints(prev => [...prev, ...newPoints]);
     
-    // Create connections for the new parcel, avoiding duplicates
-    setConnections(prev => {
-      const updated = [...prev];
-      for (let i = 0; i < newParcel.pointIds.length; i++) {
-        const fromId = newParcel.pointIds[i];
-        const toId = newParcel.pointIds[(i + 1) % newParcel.pointIds.length];
-        
-        const exists = updated.some(c => 
-          (c.fromId === fromId && c.toId === toId) || 
-          (c.fromId === toId && c.toId === fromId)
-        );
-        
-        if (!exists) {
-          updated.push({
-            id: Math.random().toString(36).substr(2, 9),
-            fromId,
-            toId
-          });
-        }
-      }
-      return updated;
-    });
-    
-    // Add new parcel and remove the division from the original
-    setParcels(prev => {
-      const updatedParcels = prev.map(p => {
-        if (selectedParcelForConversion && p.id === selectedParcelForConversion.id && selectedDivisionForConversion) {
-          return {
-            ...p,
-            divisions: p.divisions.filter(d => d.id !== selectedDivisionForConversion.id)
-          };
-        }
-        return p;
-      });
+    // Create new connections for the Gen 2 parcel specifically
+    const newConns: Connection[] = [];
+    for (let i = 0; i < newParcel.pointIds.length; i++) {
+      const fromId = newParcel.pointIds[i];
+      const toId = newParcel.pointIds[(i + 1) % newParcel.pointIds.length];
       
+      newConns.push({
+        id: Math.random().toString(36).substr(2, 9),
+        fromId,
+        toId,
+        createdAt: Date.now()
+      });
+    }
+    
+    setConnections(prev => [...prev, ...newConns]);
+    
+    // Add the new Gen 2 parcel to the list as an independent entity
+    // We do NOT remove the division from the original parcel to preserve Gen 1
+    setParcels(prev => {
       const parcelWithTimestamp = {
         ...newParcel,
+        id: Math.random().toString(36).substr(2, 9),
         createdAt: Date.now()
       };
-      
-      return [...updatedParcels, parcelWithTimestamp];
+      return [...prev, parcelWithTimestamp];
     });
     
     setShowConvertModal(false);
