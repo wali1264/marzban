@@ -150,14 +150,14 @@ export default function App() {
         return prev;
       }
 
-      // 3. For new cycles, check if they were formed by merging old ones
-      const mergedParcels: Parcel[] = [];
+      // 3. Process new cycles
+      const newParcels: Parcel[] = [];
       newCycleIds.forEach(id => {
         const cyclePoints = cycleIdsToPoints.get(id)!;
         const coords = [...cyclePoints.map(p => [p.lng, p.lat]), [cyclePoints[0].lng, cyclePoints[0].lat]];
         const newPoly = turf.polygon([coords as any]);
         
-        // Find old parcels that are now contained within this new cycle
+        // Check if it's merged from old ones
         const mergedFrom = prev.filter(old => {
           const oldCycle = old.pointIds.map(pid => points.find(p => p.id === pid)!).filter(Boolean);
           if (oldCycle.length < 3) return false;
@@ -169,19 +169,29 @@ export default function App() {
         });
 
         if (mergedFrom.length > 0) {
-          // Rule: Inherit metadata from the oldest one (First-Child Priority)
           const oldest = [...mergedFrom].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))[0];
-          mergedParcels.push({
+          newParcels.push({
             ...oldest,
             pointIds: cyclePoints.map(p => p.id),
             area: calculatePolygonArea(cyclePoints),
             generation: getGenerationForParcel(cyclePoints.map(p => p.id), prev)
           });
+        } else {
+          // Brand new cycle - Add as Gen 1
+          newParcels.push({
+            id: Math.random().toString(36).substr(2, 9),
+            name: '',
+            pointIds: cyclePoints.map(p => p.id),
+            ownerName: '',
+            divisions: [],
+            area: calculatePolygonArea(cyclePoints),
+            generation: 1,
+            createdAt: Date.now()
+          });
         }
       });
 
-      const nextParcels = [...stillValid, ...mergedParcels];
-      return nextParcels;
+      return [...stillValid, ...newParcels];
     });
   }, [connections, points]);
 
@@ -240,44 +250,47 @@ export default function App() {
     return containers + 1;
   };
 
+  // 1. Hierarchical Reset Logic
   const handleReset = (gen: number) => {
     const confirmMsg = gen === 1 
       ? "آیا از ریست کامل (تمام نسل‌ها) اطمینان دارید؟ مختصات باقی می‌مانند اما تمام خطوط و نام‌ها پاک می‌شوند."
-      : `آیا از ریست نسل ${gen} و زیرمجموعه‌های آن اطمینان دارید؟ نسل‌های بالاتر دست‌نخورده باقی می‌مانند.`;
+      : gen === 2 
+        ? "آیا از ریست نسل ۲ و ۳ اطمینان دارید؟ نسل ۱ و سهام آن دست‌نخورده باقی می‌مانند."
+        : "آیا از ریست نسل ۳ اطمینان دارید؟ نسل ۱ و ۲ دست‌نخورده باقی می‌مانند.";
 
     if (confirm(confirmMsg)) {
       if (gen === 1) {
         setConnections([]);
         setParcels([]);
-      } else {
-        const keepThreshold = gen - 1;
+      } else if (gen === 2) {
+        // Reset Gen 2 and 3: Keep only Gen 1, but clear Gen 1 divisions (since Gen 2 comes from them)
+        setParcels(prev => prev
+          .filter(p => (p.generation || 1) < 2)
+          .map(p => ({ ...p, divisions: [] }))
+        );
         
-        // 1. Remove parcels of this generation or higher
-        const filteredParcels = parcels.filter(p => (p.generation || 1) <= keepThreshold);
-        
-        // 2. Clear divisions from parcels that remain
-        const resetParcels = filteredParcels.map(p => ({
-          ...p,
-          divisions: []
-        }));
-
-        setParcels(resetParcels);
-
-        // 3. Remove connections that are not part of any remaining parcel
-        const keepConnIds = new Set<string>();
-        resetParcels.forEach(p => {
-          for (let i = 0; i < p.pointIds.length; i++) {
-            const p1 = p.pointIds[i];
-            const p2 = p.pointIds[(i + 1) % p.pointIds.length];
-            const conn = connections.find(c => 
-              (c.fromId === p1 && c.toId === p2) || 
-              (c.fromId === p2 && c.toId === p1)
-            );
-            if (conn) keepConnIds.add(conn.id);
-          }
+        // Remove connections that are not part of any remaining Gen 1 parcel
+        setConnections(prev => {
+          const keepConnIds = new Set<string>();
+          parcels.filter(p => (p.generation || 1) < 2).forEach(p => {
+            for (let i = 0; i < p.pointIds.length; i++) {
+              const p1 = p.pointIds[i];
+              const p2 = p.pointIds[(i + 1) % p.pointIds.length];
+              const conn = prev.find(c => 
+                (c.fromId === p1 && c.toId === p2) || 
+                (c.fromId === p2 && c.toId === p1)
+              );
+              if (conn) keepConnIds.add(conn.id);
+            }
+          });
+          return prev.filter(c => keepConnIds.has(c.id));
         });
-        
-        setConnections(prev => prev.filter(c => keepConnIds.has(c.id)));
+      } else if (gen === 3) {
+        // Reset Gen 3: Keep Gen 1 and 2, but clear Gen 2 divisions
+        setParcels(prev => prev
+          .filter(p => (p.generation || 1) < 3)
+          .map(p => (p.generation === 2 ? { ...p, divisions: [] } : p))
+        );
       }
       setShowResetMenu(false);
     }
@@ -628,13 +641,25 @@ export default function App() {
       setShowDivisionModal(true);
     } else if (mode === 'ROTATE') {
       const parcelId = cycle.map(p => p.id).sort().join(',');
-      const parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
-      if (parcel) {
-        setSelectedParcelForRotation(parcel);
-        setRotationAngle(parcel.angle || 0);
-        setHighlightedParcelId(parcel.id);
-        setShowRotationModal(true);
+      let parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+      
+      if (!parcel) {
+        // Create a temporary parcel for rotation if it doesn't exist in state yet
+        parcel = {
+          id: Math.random().toString(36).substr(2, 9),
+          pointIds: cycle.map(p => p.id),
+          ownerName: '',
+          divisions: [],
+          area: calculatePolygonArea(cycle),
+          generation: getGenerationForParcel(cycle.map(p => p.id), parcels),
+          createdAt: Date.now()
+        };
       }
+      
+      setSelectedParcelForRotation(parcel);
+      setRotationAngle(parcel.angle || 0);
+      setHighlightedParcelId(parcel.id);
+      setShowRotationModal(true);
     } else if (mode === 'MANAGE') {
       const parcelId = cycle.map(p => p.id).sort().join(',');
       let parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
@@ -677,8 +702,8 @@ export default function App() {
     let max = bbox[3];
     let bestIntersection: any = null;
 
-    // High-precision binary search (45 iterations for sub-millimeter precision)
-    for (let i = 0; i < 45; i++) {
+    // High-precision binary search (30 iterations for millimeter precision, much faster than 45)
+    for (let i = 0; i < 30; i++) {
       const mid = (min + max) / 2;
       
       // Create a "Water Level" clipping box from the bottom up to 'mid'
@@ -751,11 +776,15 @@ export default function App() {
         if (previousCumulativeGeometries.length > 0) {
           const getPoly = (geoms: [number, number][][]) => {
             const features = geoms.map(g => {
+              if (g.length < 3) return null;
               const coords = [...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]];
-              return turf.polygon([coords as any]);
-            });
-            const union = turf.union(turf.featureCollection(features));
-            return union ? turf.buffer(union, 0) : null;
+              try {
+                return turf.polygon([coords as any]);
+              } catch (e) { return null; }
+            }).filter(Boolean);
+            if (features.length === 0) return null;
+            const union = turf.union(turf.featureCollection(features as any));
+            return union ? turf.buffer(union, 0.000001) : null; // Tiny buffer to ensure overlap for difference
           };
 
           const poly1 = getPoly(cumulativeGeometries);
@@ -764,7 +793,7 @@ export default function App() {
           if (poly1 && poly2) {
             const diff = turf.difference(turf.featureCollection([poly1, poly2]));
             if (diff) {
-              const cleanDiff = turf.buffer(diff, 0);
+              const cleanDiff = turf.buffer(diff, -0.000001); // Shrink back to original
               if (cleanDiff) {
                 if (cleanDiff.geometry.type === 'Polygon') {
                   finalGeometries = [cleanDiff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
@@ -879,11 +908,15 @@ export default function App() {
         try {
           const getPoly = (geoms: [number, number][][]) => {
             const features = geoms.map(g => {
+              if (g.length < 3) return null;
               const coords = [...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]];
-              return turf.polygon([coords as any]);
-            });
-            const union = turf.union(turf.featureCollection(features));
-            return union ? turf.buffer(union, 0) : null;
+              try {
+                return turf.polygon([coords as any]);
+              } catch (e) { return null; }
+            }).filter(Boolean);
+            if (features.length === 0) return null;
+            const union = turf.union(turf.featureCollection(features as any));
+            return union ? turf.buffer(union, 0.000001) : null;
           };
 
           const poly1 = getPoly(cumulativeGeometries);
@@ -892,7 +925,7 @@ export default function App() {
           if (poly1 && poly2) {
             const diff = turf.difference(turf.featureCollection([poly1, poly2]));
             if (diff) {
-              const cleanDiff = turf.buffer(diff, 0);
+              const cleanDiff = turf.buffer(diff, -0.000001);
               if (cleanDiff) {
                 if (cleanDiff.geometry.type === 'Polygon') {
                   finalGeometries = [cleanDiff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
@@ -1236,10 +1269,16 @@ export default function App() {
                        <Activity className="w-4 h-4" />
                      </button>
                      <button 
-                       onClick={() => handleReset(2)}
-                       className="w-full px-4 py-2 text-right text-sm text-slate-600 hover:bg-slate-50 transition-colors"
+                       onClick={() => handleReset(1)}
+                       className="w-full px-4 py-2 text-right text-sm text-red-600 hover:bg-red-50 transition-colors font-bold border-b border-slate-100"
                      >
-                       ریست تقسیمات (نسل ۲)
+                       ریست کامل (نسل ۱)
+                      </button>
+                      <button 
+                        onClick={() => handleReset(2)}
+                        className="w-full px-4 py-2 text-right text-sm text-slate-600 hover:bg-slate-50 transition-colors"
+                      >
+                        ریست تقسیمات (نسل ۲)
                      </button>
                      <button 
                        onClick={() => handleReset(3)}
