@@ -1005,7 +1005,8 @@ export default function App() {
         if (selectedParcelForConversion && p.id === selectedParcelForConversion.id && selectedDivisionForConversion) {
           return {
             ...p,
-            divisions: p.divisions.filter(d => d.id !== selectedDivisionForConversion.id)
+            divisions: p.divisions.filter(d => d.id !== selectedDivisionForConversion.id),
+            isFullyAllocated: true // Lock the allocation state once conversion starts
           };
         }
         return p;

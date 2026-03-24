@@ -20,7 +20,7 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
     return parcel.divisions.reduce((sum, d) => sum + d.percentage, 0);
   }, [parcel.divisions]);
 
-  const isComplete = Math.abs(totalPercentage - 100) < 0.01;
+  const isComplete = parcel.isFullyAllocated || Math.abs(totalPercentage - 100) < 0.01;
 
   const handleConvert = () => {
     if (!isComplete) return;
@@ -31,6 +31,16 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
     const newPoints: Point[] = [];
     const newPointIds: string[] = [];
     
+    // Optimization: Create a spatial index (simple grid) for existing points
+    // to avoid O(N*M) distance calculations.
+    // For 1cm precision, we can use a grid of ~1cm.
+    // 0.0000001 degrees is roughly 1cm.
+    const pointGrid = new Map<string, string>();
+    points.forEach(p => {
+      const key = `${Math.round(p.lng * 10000000)},${Math.round(p.lat * 10000000)}`;
+      pointGrid.set(key, p.id);
+    });
+
     division.geometry.forEach((part) => {
       part.forEach((coord, index) => {
         // Skip the last point if it's the same as the first (closed loop)
@@ -41,19 +51,13 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
         }
 
         // Check if any of these coordinates already match existing points
-        // within a very small threshold (e.g., 1cm)
-        const existingPoint = points.find(p => {
-          const distance = turf.distance(
-            turf.point([p.lng, p.lat]),
-            turf.point([coord[1], coord[0]]), // Turf uses [lng, lat]
-            { units: 'meters' }
-          );
-          return distance < 0.01; // 1cm threshold
-        });
+        // using the grid lookup (O(1) average case)
+        const key = `${Math.round(coord[1] * 10000000)},${Math.round(coord[0] * 10000000)}`;
+        const existingPointId = pointGrid.get(key);
 
-        if (existingPoint) {
-          if (!newPointIds.includes(existingPoint.id)) {
-            newPointIds.push(existingPoint.id);
+        if (existingPointId) {
+          if (!newPointIds.includes(existingPointId)) {
+            newPointIds.push(existingPointId);
           }
         } else {
           const newId = generateId();
@@ -66,6 +70,8 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
           };
           newPoints.push(newPoint);
           newPointIds.push(newId);
+          // Add to grid to avoid duplicates within the same geometry
+          pointGrid.set(key, newId);
         }
       });
     });

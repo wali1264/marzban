@@ -388,8 +388,10 @@ export default function MapView({
     return cyclesWithGen.map((item, idx) => {
       const { cycle, gen, poly, hasChildren } = item;
       
-      // Strict generation filtering
-      if (generationFilter !== 0 && gen !== generationFilter) return null;
+      // Strict generation filtering with Ghost support
+      const isGhost = generationFilter !== 0 && gen < generationFilter;
+      if (generationFilter !== 0 && gen > generationFilter) return null;
+      if (isGhost && !hasChildren) return null; // Only show parents of the current generation
 
       const area = calculatePolygonArea(cycle);
       
@@ -406,7 +408,7 @@ export default function MapView({
       // Hide area card if the parcel has children (it's a parent in the current view)
       // This ensures we only see the "active" units for the current generation
       // In "All" mode, we hide the card if it has children to avoid clutter
-      const showAreaCard = isVisible && shouldShowDetails && (generationFilter !== 0 || !hasChildren);
+      const showAreaCard = !isGhost && isVisible && shouldShowDetails && (generationFilter !== 0 || !hasChildren);
       
       // Calculate centroid for precise positioning
       const centroid = turf.centroid(poly);
@@ -425,15 +427,16 @@ export default function MapView({
           <Polygon 
             positions={cycle.map(p => [p.lat, p.lng])}
             pathOptions={{
-              color: isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b'),
-              fillColor: isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b'),
-              fillOpacity: isHighlighted ? 0.3 : 0.1,
-              weight: isHighlighted ? 4 : 2,
-              dashArray: isHighlighted ? '10, 10' : undefined
+              color: isGhost ? '#94a3b8' : (isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b')),
+              fillColor: isGhost ? 'transparent' : (isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b')),
+              fillOpacity: isGhost ? 0 : (isHighlighted ? 0.3 : 0.1),
+              weight: isGhost ? 1 : (isHighlighted ? 4 : 2),
+              dashArray: isGhost ? '5, 10' : (isHighlighted ? '10, 10' : undefined),
+              interactive: !isGhost
             }}
             eventHandlers={{
               click: (e) => {
-                if ((mode === 'DIVIDE' || mode === 'MANAGE' || mode === 'ROTATE') && onPolygonClick) {
+                if (!isGhost && (mode === 'DIVIDE' || mode === 'MANAGE' || mode === 'ROTATE') && onPolygonClick) {
                   L.DomEvent.stopPropagation(e);
                   onPolygonClick(cycle);
                 }
