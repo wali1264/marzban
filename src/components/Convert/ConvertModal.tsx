@@ -22,6 +22,11 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
 
   const isComplete = parcel.isFullyAllocated || Math.abs(totalPercentage - 100) < 0.01;
 
+  const divisionArea = React.useMemo(() => {
+    const allPolygons = division.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
+    return turf.area(turf.featureCollection(allPolygons));
+  }, [division.geometry]);
+
   const handleConvert = () => {
     if (!isComplete) return;
     setIsProcessing(true);
@@ -30,6 +35,7 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
     
     const newPoints: Point[] = [];
     const newPointIds: string[] = [];
+    const addedPointIdsSet = new Set<string>();
     
     // Optimization: Create a spatial index (simple grid) for existing points
     // to avoid O(N*M) distance calculations.
@@ -56,8 +62,9 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
         const existingPointId = pointGrid.get(key);
 
         if (existingPointId) {
-          if (!newPointIds.includes(existingPointId)) {
+          if (!addedPointIdsSet.has(existingPointId)) {
             newPointIds.push(existingPointId);
+            addedPointIdsSet.add(existingPointId);
           }
         } else {
           const newId = generateId();
@@ -70,21 +77,19 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
           };
           newPoints.push(newPoint);
           newPointIds.push(newId);
+          addedPointIdsSet.add(newId);
           // Add to grid to avoid duplicates within the same geometry
           pointGrid.set(key, newId);
         }
       });
     });
 
-    const allPolygons = division.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
-    const totalArea = turf.area(turf.featureCollection(allPolygons));
-
     const newParcel: Parcel = {
       id: generateId(),
       name: `قطعه تفکیکی از ${parcel.ownerName || 'زمین اصلی'}`,
       pointIds: newPointIds,
       divisions: [],
-      area: totalArea,
+      area: divisionArea,
       ownerName: parcel.ownerName, // Carry over owner if exists
       generation: (parcel.generation || 1) + 1,
       createdAt: Date.now()
@@ -125,11 +130,7 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-500">مساحت سهم:</span>
                   <span className="font-bold text-slate-900">
-                    {(() => {
-                      const allPolygons = division.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
-                      const area = turf.area(turf.featureCollection(allPolygons));
-                      return Math.round(area).toLocaleString();
-                    })()} متر مربع
+                    {Math.round(divisionArea).toLocaleString()} متر مربع
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-sm">

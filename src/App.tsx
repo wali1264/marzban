@@ -137,6 +137,7 @@ export default function App() {
       return;
     }
     
+    const pointMap = new Map<string, Point>(points.map(p => [p.id, p]));
     const currentCycles = findCycles(points, connections);
     const cycleIdsToPoints = new Map(currentCycles.map(cycle => [cycle.map(p => p.id).sort().join(','), cycle]));
     const cycleIds = new Set(cycleIdsToPoints.keys());
@@ -163,7 +164,7 @@ export default function App() {
         
         // Check if it's merged from old ones
         const mergedFrom = prev.filter(old => {
-          const oldCycle = old.pointIds.map(pid => points.find(p => p.id === pid)!).filter(Boolean);
+          const oldCycle = old.pointIds.map(pid => pointMap.get(pid)!).filter(Boolean);
           if (oldCycle.length < 3) return false;
           const oldCoords = [...oldCycle.map(p => [p.lng, p.lat]), [oldCycle[0].lng, oldCycle[0].lat]];
           const oldPoly = turf.polygon([oldCoords as any]);
@@ -178,7 +179,7 @@ export default function App() {
             ...oldest,
             pointIds: cyclePoints.map(p => p.id),
             area: calculatePolygonArea(cyclePoints),
-            generation: getGenerationForParcel(cyclePoints.map(p => p.id), prev)
+            generation: getGenerationForParcel(cyclePoints.map(p => p.id), prev, pointMap)
           });
         } else {
           // Brand new cycle - Add as Gen 1
@@ -226,8 +227,9 @@ export default function App() {
   const [adminPassword, setAdminPassword] = useState('');
   const [showResetMenu, setShowResetMenu] = useState(false);
 
-  const getGenerationForParcel = (pointIds: string[], currentParcels: Parcel[]) => {
-    const cycle = pointIds.map(id => points.find(p => p.id === id)!).filter(Boolean);
+  const getGenerationForParcel = (pointIds: string[], currentParcels: Parcel[], pointMap?: Map<string, Point>) => {
+    const pMap = pointMap || new Map(points.map(p => [p.id, p]));
+    const cycle = pointIds.map(id => pMap.get(id)!).filter(Boolean);
     if (cycle.length < 3) return 1;
     
     const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
@@ -237,7 +239,7 @@ export default function App() {
     currentParcels.forEach(other => {
       if (other.pointIds.sort().join(',') === pointIds.sort().join(',')) return;
       
-      const otherCycle = other.pointIds.map(id => points.find(p => p.id === id)!).filter(Boolean);
+      const otherCycle = other.pointIds.map(id => pMap.get(id)!).filter(Boolean);
       if (otherCycle.length < 3) return;
 
       const otherCoords = [...otherCycle.map(p => [p.lng, p.lat]), [otherCycle[0].lng, otherCycle[0].lat]];
@@ -984,16 +986,25 @@ export default function App() {
     setPoints(prev => [...prev, ...newPoints]);
     
     // Create new connections for the Gen 2 parcel specifically
+    // Use a Set for fast lookup of existing connections
+    const existingConnSet = new Set(connections.map(c => 
+      [c.fromId, c.toId].sort().join('-')
+    ));
+
     const newConns: Connection[] = [];
     for (let i = 0; i < newParcel.pointIds.length; i++) {
       const fromId = newParcel.pointIds[i];
       const toId = newParcel.pointIds[(i + 1) % newParcel.pointIds.length];
       
-      newConns.push({
-        id: generateId(),
-        fromId,
-        toId
-      });
+      const key = [fromId, toId].sort().join('-');
+      if (!existingConnSet.has(key)) {
+        newConns.push({
+          id: generateId(),
+          fromId,
+          toId
+        });
+        existingConnSet.add(key); // Prevent duplicates within the new set too
+      }
     }
     
     setConnections(prev => [...prev, ...newConns]);

@@ -228,9 +228,11 @@ export default function MapView({
   const cycles = useMemo(() => findCycles(points, connections), [points, connections]);
   const [zoom, setZoom] = useState(13);
 
+  const pointMap = useMemo(() => new Map(points.map(p => [p.id, p])), [points]);
+
   const trackingTarget = useMemo(() => 
-    trackingTargetId ? points.find(p => p.id === trackingTargetId) : null
-  , [trackingTargetId, points]);
+    trackingTargetId ? pointMap.get(trackingTargetId) : null
+  , [trackingTargetId, pointMap]);
 
   const trackingDistance = useMemo(() => {
     if (userLocation && trackingTarget) {
@@ -346,8 +348,8 @@ export default function MapView({
       // Filter connections based on generation
       if (!visibleConnectionIds.has(conn.id) && mode !== 'CONNECT') return null;
 
-      const from = points.find(p => p.id === conn.fromId);
-      const to = points.find(p => p.id === conn.toId);
+      const from = pointMap.get(conn.fromId);
+      const to = pointMap.get(conn.toId);
       if (from && to) {
         return (
           <Polyline 
@@ -548,14 +550,14 @@ export default function MapView({
     if (!parcel) return null;
 
     const parcelPoints = parcel.pointIds
-      .map(id => points.find(p => p.id === id))
+      .map(id => pointMap.get(id))
       .filter((p): p is Point => !!p);
 
     if (parcelPoints.length < 3) return null;
 
     const [lat, lng] = getCentroid(parcelPoints);
     return { lat, lng };
-  }, [highlightedParcelId, parcels, points]);
+  }, [highlightedParcelId, parcels, pointMap]);
 
   const centerOn = useMemo(() => {
     if (centerTrigger && userLocation) return userLocation;
