@@ -684,59 +684,55 @@ export default function App() {
     }
   };
 
-  const splitPolygon = (cycle: Point[], percentage: number, angle: number = 0): [number, number][][] => {
+  const findYForPercentage = (poly: any, targetArea: number, bbox: number[]): number => {
+    let min = bbox[1];
+    let max = bbox[3];
+    let bestY = min;
+
+    for (let i = 0; i < 30; i++) {
+      const mid = (min + max) / 2;
+      const clipPoly = turf.polygon([[[bbox[0] - 0.1, bbox[1] - 0.1], [bbox[2] + 0.1, bbox[1] - 0.1], [bbox[2] + 0.1, mid], [bbox[0] - 0.1, mid], [bbox[0] - 0.1, bbox[1] - 0.1]]]);
+      const intersection = turf.intersect(turf.featureCollection([poly, clipPoly]));
+      
+      const currentArea = intersection ? turf.area(intersection) : 0;
+      if (currentArea < targetArea) {
+        min = mid;
+      } else {
+        max = mid;
+        bestY = mid;
+      }
+    }
+    return bestY;
+  };
+
+  const splitPolygon = (cycle: Point[], startPercent: number, endPercent: number, angle: number = 0): [number, number][][] => {
     const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
     let poly = turf.polygon([coords]);
     const centroid = turf.centroid(poly);
 
-    // Rotate polygon by -angle to align the "gravity" with axes
     if (angle !== 0) {
       poly = turf.transformRotate(poly, -angle, { pivot: centroid });
     }
 
     const bbox = turf.bbox(poly);
     const totalArea = turf.area(poly);
-    const targetArea = totalArea * (percentage / 100);
+    
+    const startY = startPercent <= 0 ? bbox[1] - 0.1 : findYForPercentage(poly, totalArea * (startPercent / 100), bbox);
+    const endY = endPercent >= 100 ? bbox[3] + 0.1 : findYForPercentage(poly, totalArea * (endPercent / 100), bbox);
 
-    let min = bbox[1];
-    let max = bbox[3];
-    let bestIntersection: any = null;
+    const clipPoly = turf.polygon([[[bbox[0] - 0.1, startY], [bbox[2] + 0.1, startY], [bbox[2] + 0.1, endY], [bbox[0] - 0.1, endY], [bbox[0] - 0.1, startY]]]);
+    let intersection = turf.intersect(turf.featureCollection([poly, clipPoly]));
 
-    // High-precision binary search (30 iterations for millimeter precision, much faster than 45)
-    for (let i = 0; i < 30; i++) {
-      const mid = (min + max) / 2;
-      
-      // Create a "Water Level" clipping box from the bottom up to 'mid'
-      const clipPoly = turf.polygon([[[bbox[0] - 0.1, bbox[1] - 0.1], [bbox[2] + 0.1, bbox[1] - 0.1], [bbox[2] + 0.1, mid], [bbox[0] - 0.1, mid], [bbox[0] - 0.1, bbox[1] - 0.1]]]);
+    if (!intersection) return [];
 
-      let intersection = turf.intersect(turf.featureCollection([poly, clipPoly]));
-      
-      if (!intersection) {
-        min = mid;
-        continue;
-      }
-
-      const currentArea = turf.area(intersection);
-      if (currentArea < targetArea) {
-        min = mid;
-      } else {
-        max = mid;
-      }
-      bestIntersection = intersection;
-    }
-
-    if (!bestIntersection) return [];
-
-    // Rotate back to original orientation
     if (angle !== 0) {
-      bestIntersection = turf.transformRotate(bestIntersection, angle, { pivot: centroid });
+      intersection = turf.transformRotate(intersection, angle, { pivot: centroid });
     }
 
-    // Professional MultiPolygon handling: Water fills ALL pockets at the same level
-    if (bestIntersection.geometry.type === 'Polygon') {
-      return [bestIntersection.geometry.coordinates[0].map((c: any) => [c[1], c[0]] as [number, number])];
-    } else if (bestIntersection.geometry.type === 'MultiPolygon') {
-      return bestIntersection.geometry.coordinates.map((p: any) => p[0].map((c: any) => [c[1], c[0]] as [number, number]));
+    if (intersection.geometry.type === 'Polygon') {
+      return [intersection.geometry.coordinates[0].map((c: any) => [c[1], c[0]] as [number, number])];
+    } else if (intersection.geometry.type === 'MultiPolygon') {
+      return intersection.geometry.coordinates.map((p: any) => p[0].map((c: any) => [c[1], c[0]] as [number, number]));
     }
     
     return [];
@@ -756,7 +752,6 @@ export default function App() {
     const currentTotal = existingParcel?.divisions.reduce((sum, d) => sum + d.percentage, 0) || 0;
     const remaining = 100 - currentTotal;
 
-    // Use a small epsilon for float precision (0.001%)
     if (percentage > remaining + 0.001) {
       const remainingArea = (remaining / 100) * (existingParcel?.area || calculatePolygonArea(selectedCycle));
       alert(`خطا: مقدار وارد شده از فضای باقی‌مانده بیشتر است.\nباقی‌مانده: ${remaining.toFixed(2)}٪ (${remainingArea.toFixed(1)} متر مربع)`);
@@ -764,51 +759,8 @@ export default function App() {
     }
 
     const parcelAngle = existingParcel?.angle || 0;
-    
-    // Calculate the cumulative geometry (from 0 to currentTotal + percentage)
-    const cumulativeGeometries = splitPolygon(selectedCycle, percentage + currentTotal, parcelAngle);
-    let finalGeometries = cumulativeGeometries;
+    const finalGeometries = splitPolygon(selectedCycle, currentTotal, currentTotal + percentage, parcelAngle);
 
-    if (currentTotal > 0 && cumulativeGeometries.length > 0) {
-      try {
-        const previousCumulativeGeometries = splitPolygon(selectedCycle, currentTotal, parcelAngle);
-        
-        if (previousCumulativeGeometries.length > 0) {
-          const getPoly = (geoms: [number, number][][]) => {
-            const features = geoms.map(g => {
-              if (g.length < 3) return null;
-              const coords = [...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]];
-              try {
-                return turf.polygon([coords as any]);
-              } catch (e) { return null; }
-            }).filter(Boolean);
-            if (features.length === 0) return null;
-            const union = turf.union(turf.featureCollection(features as any));
-            return union ? turf.buffer(union, 0.000001) : null; // Tiny buffer to ensure overlap for difference
-          };
-
-          const poly1 = getPoly(cumulativeGeometries);
-          const poly2 = getPoly(previousCumulativeGeometries);
-          
-          if (poly1 && poly2) {
-            const diff = turf.difference(turf.featureCollection([poly1, poly2]));
-            if (diff) {
-              const cleanDiff = turf.buffer(diff, -0.000001); // Shrink back to original
-              if (cleanDiff) {
-                if (cleanDiff.geometry.type === 'Polygon') {
-                  finalGeometries = [cleanDiff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
-                } else if (cleanDiff.geometry.type === 'MultiPolygon') {
-                  finalGeometries = cleanDiff.geometry.coordinates.map(p => p[0].map(c => [c[1], c[0]] as [number, number]));
-                }
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.error("Geometry precision error:", error);
-      }
-    }
-    
     const newDivision: Division = {
       id: Math.random().toString(36).substr(2, 9),
       partnerId: name,
@@ -898,49 +850,9 @@ export default function App() {
 
     const parcelAngle = parcel.angle || 0;
     let currentTotal = 0;
-    let previousCumulativeGeometries: [number, number][][] | null = null;
 
     const newDivisions = updatedDivisions.map(div => {
-      const cumulativeGeometries = splitPolygon(cycle, div.percentage + currentTotal, parcelAngle);
-      let finalGeometries = cumulativeGeometries;
-
-      if (previousCumulativeGeometries) {
-        try {
-          const getPoly = (geoms: [number, number][][]) => {
-            const features = geoms.map(g => {
-              if (g.length < 3) return null;
-              const coords = [...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]];
-              try {
-                return turf.polygon([coords as any]);
-              } catch (e) { return null; }
-            }).filter(Boolean);
-            if (features.length === 0) return null;
-            const union = turf.union(turf.featureCollection(features as any));
-            return union ? turf.buffer(union, 0.000001) : null;
-          };
-
-          const poly1 = getPoly(cumulativeGeometries);
-          const poly2 = getPoly(previousCumulativeGeometries);
-          
-          if (poly1 && poly2) {
-            const diff = turf.difference(turf.featureCollection([poly1, poly2]));
-            if (diff) {
-              const cleanDiff = turf.buffer(diff, -0.000001);
-              if (cleanDiff) {
-                if (cleanDiff.geometry.type === 'Polygon') {
-                  finalGeometries = [cleanDiff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
-                } else if (cleanDiff.geometry.type === 'MultiPolygon') {
-                  finalGeometries = cleanDiff.geometry.coordinates.map(p => p[0].map(c => [c[1], c[0]] as [number, number]));
-                }
-              }
-            }
-          }
-        } catch (e) {
-          console.error("Recalculate precision error:", e);
-        }
-      }
-
-      previousCumulativeGeometries = cumulativeGeometries;
+      const finalGeometries = splitPolygon(cycle, currentTotal, currentTotal + div.percentage, parcelAngle);
       const result = { ...div, geometry: finalGeometries };
       currentTotal += div.percentage;
       return result;
