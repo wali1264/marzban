@@ -254,96 +254,71 @@ export default function MapView({
   }, [parcels]);
 
   const cyclesWithGen = useMemo(() => {
-    // 1. Start with cycles found by the algorithm
-    const polys = cycles.map(cycle => {
-      const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
-      return { 
-        cycle, 
-        poly: turf.polygon([coords as any]),
-        connectionIds: new Set<string>()
-      };
-    });
-
-    // 2. Add existing parcels that might have been missed by the algorithm (e.g. large parent cycles)
-    parcels?.forEach(p => {
-      const parcelId = p.pointIds.sort().join(',');
-      const alreadyFound = polys.some(item => item.cycle.map(pt => pt.id).sort().join(',') === parcelId);
+    // 1. Map parcels to polygons
+    const polys = (parcels || []).map(p => {
+      const cyclePoints = p.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean);
+      if (cyclePoints.length < 3) return null;
       
-      if (!alreadyFound) {
-        const cyclePoints = p.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean);
-        if (cyclePoints.length >= 3) {
-          const coords = [...cyclePoints.map(pt => [pt.lng, pt.lat]), [cyclePoints[0].lng, cyclePoints[0].lat]];
-          polys.push({
-            cycle: cyclePoints,
-            poly: turf.polygon([coords as any]),
-            connectionIds: new Set<string>()
-          });
-        }
-      }
-    });
-
-    // Map connections to their IDs for easy lookup
-    polys.forEach(item => {
-      for (let i = 0; i < item.cycle.length; i++) {
-        const p1 = item.cycle[i];
-        const p2 = item.cycle[(i + 1) % item.cycle.length];
+      const coords = [...cyclePoints.map(pt => [pt.lng, pt.lat]), [cyclePoints[0].lng, cyclePoints[0].lat]];
+      const poly = turf.polygon([coords as any]);
+      
+      const connectionIds = new Set<string>();
+      for (let i = 0; i < cyclePoints.length; i++) {
+        const p1 = cyclePoints[i];
+        const p2 = cyclePoints[(i + 1) % cyclePoints.length];
         const conn = connections.find(c => 
           (c.fromId === p1.id && c.toId === p2.id) || 
           (c.fromId === p2.id && c.toId === p1.id)
         );
-        if (conn) item.connectionIds.add(conn.id);
+        if (conn) connectionIds.add(conn.id);
       }
-    });
 
+      return {
+        id: p.id,
+        cycle: cyclePoints,
+        poly,
+        connectionIds,
+        gen: p.generation || 1,
+        parcel: p
+      };
+    }).filter(Boolean) as any[];
+
+    // 2. Determine if a parcel has children (for area subtraction and UI)
     return polys.map(item => {
-      const parcelId = item.cycle.map(p => p.id).sort().join(',');
-      const existingParcel = parcelMap.get(parcelId);
-      
-      let gen = existingParcel?.generation;
-      
-      if (!gen) {
-        // Count how many other polygons contain this one
-        let containers = 0;
-        const itemCentroid = turf.centroid(item.poly);
-        
-        for (const other of polys) {
-          if (item === other) continue;
-          try {
-            // Use centroid check for more robust land division generation detection
-            if (turf.booleanPointInPolygon(itemCentroid, other.poly)) {
-              containers++;
-            }
-          } catch (e) {
-            // Fallback
-          }
-        }
-        gen = containers + 1;
-      }
-      
-      // Check if this cycle has children (other cycles contained within it)
       const hasChildren = polys.some(other => {
-        if (item === other) return false;
+        if (item.id === other.id) return false;
+        if (other.gen <= item.gen) return false; // Only higher generations can be children
         try {
           const otherCentroid = turf.centroid(other.poly);
           return turf.booleanPointInPolygon(otherCentroid, item.poly);
-        } catch (e) {
-          return false;
-        }
+        } catch (e) { return false; }
       });
       
-      return { ...item, gen, hasChildren, layerId: `layer-gen-${gen}` };
+      return { ...item, hasChildren, layerId: `layer-gen-${item.gen}` };
     });
-  }, [cycles, connections, parcelMap, parcels, points]);
+  }, [parcels, points, connections]);
 
   const visibleConnectionIds = useMemo(() => {
     const ids = new Set<string>();
+    
+    // Add connections from parcels of the current generation
     cyclesWithGen.forEach(item => {
       if (item.gen === generationFilter) {
         item.connectionIds.forEach(id => ids.add(id));
       }
     });
+
+    // Also add "orphan" connections (not part of any parcel) to Gen 1
+    if (generationFilter === 1) {
+      const parcelConnIds = new Set<string>();
+      cyclesWithGen.forEach(item => item.connectionIds.forEach(id => parcelConnIds.add(id)));
+      connections.forEach(conn => {
+        if (!parcelConnIds.has(conn.id)) ids.add(conn.id);
+      });
+    }
+
     return ids;
-  }, [cyclesWithGen, generationFilter]);
+  }, [cyclesWithGen, generationFilter, connections]);
 
   const handleLongPressStart = (callback?: () => void) => {
     if (!callback) return;
