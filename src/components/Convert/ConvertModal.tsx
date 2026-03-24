@@ -22,43 +22,42 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
     const newPoints: Point[] = [];
     const newPointIds: string[] = [];
     
-    division.geometry.forEach((part) => {
-      part.forEach((coord, index) => {
-        // Skip the last point if it's the same as the first (closed loop)
-        if (index === part.length - 1 && 
-            coord[0] === part[0][0] && 
-            coord[1] === part[0][1]) {
-          return;
-        }
+    // The division.geometry is an array of [lat, lng] coordinates
+    const firstPart = division.geometry[0] || [];
+    
+    firstPart.forEach((coord, index) => {
+      // Skip the last point if it's the same as the first (closed loop)
+      if (index === firstPart.length - 1 && 
+          coord[0] === firstPart[0][0] && 
+          coord[1] === firstPart[0][1]) {
+        return;
+      }
 
-        // Check if any of these coordinates already match existing points
-        // within a very small threshold (e.g., 1cm)
-        const existingPoint = points.find(p => {
-          const distance = turf.distance(
-            turf.point([p.lng, p.lat]),
-            turf.point([coord[1], coord[0]]), // Turf uses [lng, lat]
-            { units: 'meters' }
-          );
-          return distance < 0.01; // 1cm threshold
-        });
-
-        if (existingPoint) {
-          if (!newPointIds.includes(existingPoint.id)) {
-            newPointIds.push(existingPoint.id);
-          }
-        } else {
-          const newId = Math.random().toString(36).substr(2, 9);
-          const newPoint: Point = {
-            id: newId,
-            lng: coord[1],
-            lat: coord[0],
-            timestamp: Date.now(),
-            accuracy: 0.1 // High precision generated point
-          };
-          newPoints.push(newPoint);
-          newPointIds.push(newId);
-        }
+      // Check if any of these coordinates already match existing points
+      // within a very small threshold (e.g., 1cm)
+      const existingPoint = points.find(p => {
+        const distance = turf.distance(
+          turf.point([p.lng, p.lat]),
+          turf.point([coord[1], coord[0]]), // Turf uses [lng, lat]
+          { units: 'meters' }
+        );
+        return distance < 0.01; // 1cm threshold
       });
+
+      if (existingPoint) {
+        newPointIds.push(existingPoint.id);
+      } else {
+        const newId = Math.random().toString(36).substr(2, 9);
+        const newPoint: Point = {
+          id: newId,
+          lng: coord[1],
+          lat: coord[0],
+          timestamp: Date.now(),
+          accuracy: 0.1 // High precision generated point
+        };
+        newPoints.push(newPoint);
+        newPointIds.push(newId);
+      }
     });
 
     const allPolygons = division.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
@@ -113,10 +112,7 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
                     {(() => {
                       const allPolygons = division.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
                       const area = turf.area(turf.featureCollection(allPolygons));
-                      const integerPart = Math.floor(area);
-                      const decimalPart = Math.round((area - integerPart) * 100);
-                      if (decimalPart === 0) return integerPart.toLocaleString('fa-IR');
-                      return `${integerPart.toLocaleString('fa-IR')}/${decimalPart.toLocaleString('fa-IR')}`;
+                      return Math.round(area).toLocaleString();
                     })()} متر مربع
                   </span>
                 </div>

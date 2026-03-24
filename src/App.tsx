@@ -44,7 +44,7 @@ import {
   Wifi
 } from 'lucide-react';
 import * as turf from '@turf/turf';
-import { findCycles, calculatePolygonArea, isMinimalCycle } from './utils';
+import { findCycles, calculatePolygonArea } from './utils';
 import MapView from './components/Map/MapView';
 import PrecisionRecorder from './components/Recorder/PrecisionRecorder';
 import BackupModal from './components/Backup/BackupModal';
@@ -138,28 +138,11 @@ export default function App() {
     const cycleIds = new Set(cycleIdsToPoints.keys());
     
     setParcels(prev => {
-      // 1. Keep existing parcels that are still valid (boundary is intact)
-      // A parcel is valid if all its points exist and all its boundary connections exist
-      const stillValid = prev.filter(p => {
-        // Check if all points exist
-        const allPointsExist = p.pointIds.every(id => points.some(pt => pt.id === id));
-        if (!allPointsExist) return false;
-        
-        // Check if all connections exist in a cycle
-        for (let i = 0; i < p.pointIds.length; i++) {
-          const id1 = p.pointIds[i];
-          const id2 = p.pointIds[(i + 1) % p.pointIds.length];
-          const hasConn = connections.some(c => 
-            (c.fromId === id1 && c.toId === id2) || 
-            (c.fromId === id2 && c.toId === id1)
-          );
-          if (!hasConn) return false;
-        }
-        return true;
-      });
+      // 1. Keep existing parcels that are still valid
+      const stillValid = prev.filter(p => cycleIds.has(p.pointIds.sort().join(',')));
       
-      // 2. Identify new cycles found by the algorithm
-      const existingCycleIds = new Set(stillValid.map(p => p.pointIds.sort().join(',')));
+      // 2. Identify new cycles
+      const existingCycleIds = new Set(prev.map(p => p.pointIds.sort().join(',')));
       const newCycleIds = Array.from(cycleIds).filter(id => !existingCycleIds.has(id));
       
       if (newCycleIds.length === 0) {
@@ -171,11 +154,6 @@ export default function App() {
       const newParcels: Parcel[] = [];
       newCycleIds.forEach(id => {
         const cyclePoints = cycleIdsToPoints.get(id)!;
-        
-        // CRITICAL: Only auto-create if it's a minimal cycle (independent piece)
-        // This prevents "composite" ghost parcels from appearing when two parcels share a border.
-        if (!isMinimalCycle(cyclePoints, currentCycles)) return;
-        
         const coords = [...cyclePoints.map(p => [p.lng, p.lat]), [cyclePoints[0].lng, cyclePoints[0].lat]];
         const newPoly = turf.polygon([coords as any]);
         
@@ -196,7 +174,7 @@ export default function App() {
             ...oldest,
             pointIds: cyclePoints.map(p => p.id),
             area: calculatePolygonArea(cyclePoints),
-            generation: oldest.generation || 1
+            generation: getGenerationForParcel(cyclePoints.map(p => p.id), prev)
           });
         } else {
           // Brand new cycle - Add as Gen 1
@@ -207,7 +185,7 @@ export default function App() {
             ownerName: '',
             divisions: [],
             area: calculatePolygonArea(cyclePoints),
-            generation: 1, // Default to Gen 1 for brand new pieces
+            generation: 1,
             createdAt: Date.now()
           });
         }
@@ -286,13 +264,15 @@ export default function App() {
         setParcels([]);
       } else if (gen === 2) {
         // Reset Gen 2 and 3: Keep only Gen 1, but clear Gen 1 divisions (since Gen 2 comes from them)
-        const gen1Parcels = parcels.filter(p => (p.generation || 1) < 2);
-        setParcels(gen1Parcels.map(p => ({ ...p, divisions: [] })));
+        setParcels(prev => prev
+          .filter(p => (p.generation || 1) < 2)
+          .map(p => ({ ...p, divisions: [] }))
+        );
         
         // Remove connections that are not part of any remaining Gen 1 parcel
         setConnections(prev => {
           const keepConnIds = new Set<string>();
-          gen1Parcels.forEach(p => {
+          parcels.filter(p => (p.generation || 1) < 2).forEach(p => {
             for (let i = 0; i < p.pointIds.length; i++) {
               const p1 = p.pointIds[i];
               const p2 = p.pointIds[(i + 1) % p.pointIds.length];
@@ -307,74 +287,30 @@ export default function App() {
         });
       } else if (gen === 3) {
         // Reset Gen 3: Keep Gen 1 and 2, but clear Gen 2 divisions
-        const gen1And2Parcels = parcels.filter(p => (p.generation || 1) < 3);
-        setParcels(gen1And2Parcels.map(p => (p.generation === 2 ? { ...p, divisions: [] } : p)));
-        
-        // Remove connections that are not part of any remaining Gen 1 or 2 parcel
-        setConnections(prev => {
-          const keepConnIds = new Set<string>();
-          gen1And2Parcels.forEach(p => {
-            for (let i = 0; i < p.pointIds.length; i++) {
-              const p1 = p.pointIds[i];
-              const p2 = p.pointIds[(i + 1) % p.pointIds.length];
-              const conn = prev.find(c => 
-                (c.fromId === p1 && c.toId === p2) || 
-                (c.fromId === p2 && c.toId === p1)
-              );
-              if (conn) keepConnIds.add(conn.id);
-            }
-          });
-          return prev.filter(c => keepConnIds.has(c.id));
-        });
+        setParcels(prev => prev
+          .filter(p => (p.generation || 1) < 3)
+          .map(p => (p.generation === 2 ? { ...p, divisions: [] } : p))
+        );
       }
       setShowResetMenu(false);
     }
   };
 
   const handleRefreshSync = () => {
-    // Force a re-calculation of cycles and parcels
-    const currentCycles = findCycles(points, connections);
-    
     setParcels(prev => {
-      // Keep valid ones
-      const valid = prev.filter(p => {
-        const allPoints = p.pointIds.every(id => points.some(pt => pt.id === id));
-        return allPoints;
-      });
-      
-      // Add missing minimal cycles as Gen 1
-      const existingIds = new Set(valid.map(p => p.pointIds.sort().join(',')));
-      const missingCycles = currentCycles.filter(c => {
-        const id = c.map(p => p.id).sort().join(',');
-        return !existingIds.has(id) && isMinimalCycle(c, currentCycles);
-      });
-      
-      const newParcels = missingCycles.map(c => ({
-        id: Math.random().toString(36).substr(2, 9),
-        name: '',
-        ownerName: '',
-        pointIds: c.map(p => p.id),
-        divisions: [],
-        generation: 1,
-        createdAt: Date.now(),
-        area: calculatePolygonArea(c)
-      }));
-      
-      const updated = [...valid, ...newParcels].map(p => {
+      const updated = prev.map(p => {
         const parcelPoints = p.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean);
         if (parcelPoints.length < 3) return p;
         return {
           ...p,
           area: calculatePolygonArea(parcelPoints),
-          generation: getGenerationForParcel(p.pointIds, [...valid, ...newParcels])
+          generation: getGenerationForParcel(p.pointIds, prev)
         };
       });
-      
       return updated;
     });
-    
+    alert("تمام مساحت‌ها و نسل‌ها با موفقیت بازنگری و همگام‌سازی شدند.");
     setShowResetMenu(false);
-    alert("همگام‌سازی با موفقیت انجام شد.");
   };
   const [loginError, setLoginError] = useState(false);
 
@@ -748,55 +684,59 @@ export default function App() {
     }
   };
 
-  const findYForPercentage = (poly: any, targetArea: number, bbox: number[]): number => {
-    let min = bbox[1];
-    let max = bbox[3];
-    let bestY = min;
-
-    for (let i = 0; i < 30; i++) {
-      const mid = (min + max) / 2;
-      const clipPoly = turf.polygon([[[bbox[0] - 0.1, bbox[1] - 0.1], [bbox[2] + 0.1, bbox[1] - 0.1], [bbox[2] + 0.1, mid], [bbox[0] - 0.1, mid], [bbox[0] - 0.1, bbox[1] - 0.1]]]);
-      const intersection = turf.intersect(turf.featureCollection([poly, clipPoly]));
-      
-      const currentArea = intersection ? turf.area(intersection) : 0;
-      if (currentArea < targetArea) {
-        min = mid;
-      } else {
-        max = mid;
-        bestY = mid;
-      }
-    }
-    return bestY;
-  };
-
-  const splitPolygon = (cycle: Point[], startPercent: number, endPercent: number, angle: number = 0): [number, number][][] => {
+  const splitPolygon = (cycle: Point[], percentage: number, angle: number = 0): [number, number][][] => {
     const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
     let poly = turf.polygon([coords]);
     const centroid = turf.centroid(poly);
 
+    // Rotate polygon by -angle to align the "gravity" with axes
     if (angle !== 0) {
       poly = turf.transformRotate(poly, -angle, { pivot: centroid });
     }
 
     const bbox = turf.bbox(poly);
     const totalArea = turf.area(poly);
-    
-    const startY = startPercent <= 0 ? bbox[1] - 0.1 : findYForPercentage(poly, totalArea * (startPercent / 100), bbox);
-    const endY = endPercent >= 100 ? bbox[3] + 0.1 : findYForPercentage(poly, totalArea * (endPercent / 100), bbox);
+    const targetArea = totalArea * (percentage / 100);
 
-    const clipPoly = turf.polygon([[[bbox[0] - 0.1, startY], [bbox[2] + 0.1, startY], [bbox[2] + 0.1, endY], [bbox[0] - 0.1, endY], [bbox[0] - 0.1, startY]]]);
-    let intersection = turf.intersect(turf.featureCollection([poly, clipPoly]));
+    let min = bbox[1];
+    let max = bbox[3];
+    let bestIntersection: any = null;
 
-    if (!intersection) return [];
+    // High-precision binary search (30 iterations for millimeter precision, much faster than 45)
+    for (let i = 0; i < 30; i++) {
+      const mid = (min + max) / 2;
+      
+      // Create a "Water Level" clipping box from the bottom up to 'mid'
+      const clipPoly = turf.polygon([[[bbox[0] - 0.1, bbox[1] - 0.1], [bbox[2] + 0.1, bbox[1] - 0.1], [bbox[2] + 0.1, mid], [bbox[0] - 0.1, mid], [bbox[0] - 0.1, bbox[1] - 0.1]]]);
 
-    if (angle !== 0) {
-      intersection = turf.transformRotate(intersection, angle, { pivot: centroid });
+      let intersection = turf.intersect(turf.featureCollection([poly, clipPoly]));
+      
+      if (!intersection) {
+        min = mid;
+        continue;
+      }
+
+      const currentArea = turf.area(intersection);
+      if (currentArea < targetArea) {
+        min = mid;
+      } else {
+        max = mid;
+      }
+      bestIntersection = intersection;
     }
 
-    if (intersection.geometry.type === 'Polygon') {
-      return [intersection.geometry.coordinates[0].map((c: any) => [c[1], c[0]] as [number, number])];
-    } else if (intersection.geometry.type === 'MultiPolygon') {
-      return intersection.geometry.coordinates.map((p: any) => p[0].map((c: any) => [c[1], c[0]] as [number, number]));
+    if (!bestIntersection) return [];
+
+    // Rotate back to original orientation
+    if (angle !== 0) {
+      bestIntersection = turf.transformRotate(bestIntersection, angle, { pivot: centroid });
+    }
+
+    // Professional MultiPolygon handling: Water fills ALL pockets at the same level
+    if (bestIntersection.geometry.type === 'Polygon') {
+      return [bestIntersection.geometry.coordinates[0].map((c: any) => [c[1], c[0]] as [number, number])];
+    } else if (bestIntersection.geometry.type === 'MultiPolygon') {
+      return bestIntersection.geometry.coordinates.map((p: any) => p[0].map((c: any) => [c[1], c[0]] as [number, number]));
     }
     
     return [];
@@ -816,6 +756,7 @@ export default function App() {
     const currentTotal = existingParcel?.divisions.reduce((sum, d) => sum + d.percentage, 0) || 0;
     const remaining = 100 - currentTotal;
 
+    // Use a small epsilon for float precision (0.001%)
     if (percentage > remaining + 0.001) {
       const remainingArea = (remaining / 100) * (existingParcel?.area || calculatePolygonArea(selectedCycle));
       alert(`خطا: مقدار وارد شده از فضای باقی‌مانده بیشتر است.\nباقی‌مانده: ${remaining.toFixed(2)}٪ (${remainingArea.toFixed(1)} متر مربع)`);
@@ -823,8 +764,51 @@ export default function App() {
     }
 
     const parcelAngle = existingParcel?.angle || 0;
-    const finalGeometries = splitPolygon(selectedCycle, currentTotal, currentTotal + percentage, parcelAngle);
+    
+    // Calculate the cumulative geometry (from 0 to currentTotal + percentage)
+    const cumulativeGeometries = splitPolygon(selectedCycle, percentage + currentTotal, parcelAngle);
+    let finalGeometries = cumulativeGeometries;
 
+    if (currentTotal > 0 && cumulativeGeometries.length > 0) {
+      try {
+        const previousCumulativeGeometries = splitPolygon(selectedCycle, currentTotal, parcelAngle);
+        
+        if (previousCumulativeGeometries.length > 0) {
+          const getPoly = (geoms: [number, number][][]) => {
+            const features = geoms.map(g => {
+              if (g.length < 3) return null;
+              const coords = [...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]];
+              try {
+                return turf.polygon([coords as any]);
+              } catch (e) { return null; }
+            }).filter(Boolean);
+            if (features.length === 0) return null;
+            const union = turf.union(turf.featureCollection(features as any));
+            return union ? turf.buffer(union, 0.000001) : null; // Tiny buffer to ensure overlap for difference
+          };
+
+          const poly1 = getPoly(cumulativeGeometries);
+          const poly2 = getPoly(previousCumulativeGeometries);
+          
+          if (poly1 && poly2) {
+            const diff = turf.difference(turf.featureCollection([poly1, poly2]));
+            if (diff) {
+              const cleanDiff = turf.buffer(diff, -0.000001); // Shrink back to original
+              if (cleanDiff) {
+                if (cleanDiff.geometry.type === 'Polygon') {
+                  finalGeometries = [cleanDiff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
+                } else if (cleanDiff.geometry.type === 'MultiPolygon') {
+                  finalGeometries = cleanDiff.geometry.coordinates.map(p => p[0].map(c => [c[1], c[0]] as [number, number]));
+                }
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Geometry precision error:", error);
+      }
+    }
+    
     const newDivision: Division = {
       id: Math.random().toString(36).substr(2, 9),
       partnerId: name,
@@ -914,9 +898,49 @@ export default function App() {
 
     const parcelAngle = parcel.angle || 0;
     let currentTotal = 0;
+    let previousCumulativeGeometries: [number, number][][] | null = null;
 
     const newDivisions = updatedDivisions.map(div => {
-      const finalGeometries = splitPolygon(cycle, currentTotal, currentTotal + div.percentage, parcelAngle);
+      const cumulativeGeometries = splitPolygon(cycle, div.percentage + currentTotal, parcelAngle);
+      let finalGeometries = cumulativeGeometries;
+
+      if (previousCumulativeGeometries) {
+        try {
+          const getPoly = (geoms: [number, number][][]) => {
+            const features = geoms.map(g => {
+              if (g.length < 3) return null;
+              const coords = [...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]];
+              try {
+                return turf.polygon([coords as any]);
+              } catch (e) { return null; }
+            }).filter(Boolean);
+            if (features.length === 0) return null;
+            const union = turf.union(turf.featureCollection(features as any));
+            return union ? turf.buffer(union, 0.000001) : null;
+          };
+
+          const poly1 = getPoly(cumulativeGeometries);
+          const poly2 = getPoly(previousCumulativeGeometries);
+          
+          if (poly1 && poly2) {
+            const diff = turf.difference(turf.featureCollection([poly1, poly2]));
+            if (diff) {
+              const cleanDiff = turf.buffer(diff, -0.000001);
+              if (cleanDiff) {
+                if (cleanDiff.geometry.type === 'Polygon') {
+                  finalGeometries = [cleanDiff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
+                } else if (cleanDiff.geometry.type === 'MultiPolygon') {
+                  finalGeometries = cleanDiff.geometry.coordinates.map(p => p[0].map(c => [c[1], c[0]] as [number, number]));
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.error("Recalculate precision error:", e);
+        }
+      }
+
+      previousCumulativeGeometries = cumulativeGeometries;
       const result = { ...div, geometry: finalGeometries };
       currentTotal += div.percentage;
       return result;
@@ -1034,12 +1058,9 @@ export default function App() {
   };
 
   const handleRestore = (data: { points: Point[]; connections: Connection[]; parcels: Parcel[] }) => {
-    // Ensure clean state update
-    setPoints([...data.points]);
-    setConnections([...data.connections]);
-    setParcels([...data.parcels]);
-    setGenerationFilter(1);
-    setMode('VIEW');
+    setPoints(data.points);
+    setConnections(data.connections);
+    setParcels(data.parcels);
   };
 
   const handleConvertShare = (newPoints: Point[], newParcel: Parcel) => {
