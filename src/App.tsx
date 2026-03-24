@@ -126,6 +126,10 @@ export default function App() {
     return true;
   };
 
+  const generateId = () => {
+    return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+  };
+
   // Clean up parcels that are no longer valid cycles
   useEffect(() => {
     if (points.length === 0 || connections.length === 0) {
@@ -179,7 +183,7 @@ export default function App() {
         } else {
           // Brand new cycle - Add as Gen 1
           newParcels.push({
-            id: Math.random().toString(36).substr(2, 9),
+            id: generateId(),
             name: '',
             pointIds: cyclePoints.map(p => p.id),
             ownerName: '',
@@ -202,7 +206,7 @@ export default function App() {
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
   const [showProjectInfo, setShowProjectInfo] = useState(false);
-  const [generationFilter, setGenerationFilter] = useState(1);
+  const [generationFilter, setGenerationFilter] = useState(0); // 0 for All, 1, 2, 3 for specific
   const [showOwnerModal, setShowOwnerModal] = useState(false);
   const [selectedParcelForOwner, setSelectedParcelForOwner] = useState<Parcel | null>(null);
   const [ownerNameInput, setOwnerNameInput] = useState('');
@@ -986,7 +990,7 @@ export default function App() {
       const toId = newParcel.pointIds[(i + 1) % newParcel.pointIds.length];
       
       newConns.push({
-        id: Math.random().toString(36).substr(2, 9),
+        id: generateId(),
         fromId,
         toId
       });
@@ -1009,7 +1013,9 @@ export default function App() {
 
       const parcelWithTimestamp = {
         ...newParcel,
-        id: Math.random().toString(36).substr(2, 9),
+        id: generateId(),
+        parentId: selectedParcelForConversion?.id,
+        generation: (selectedParcelForConversion?.generation || 1) + 1,
         createdAt: Date.now()
       };
       return [...updatedParcels, parcelWithTimestamp];
@@ -1081,7 +1087,7 @@ export default function App() {
                onClick={() => setIsGenMenuOpen(!isGenMenuOpen)}
                className="flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700 transition-all shadow-sm"
              >
-               <span>نسل {generationFilter}</span>
+               <span>{generationFilter === 0 ? "همه" : `نسل ${generationFilter}`}</span>
                <ChevronDown className={cn("w-4 h-4 transition-transform", isGenMenuOpen && "rotate-180")} />
              </button>
 
@@ -1093,7 +1099,7 @@ export default function App() {
                    exit={{ opacity: 0, y: -10 }}
                    className="absolute top-full right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-xl z-50 overflow-hidden min-w-[120px]"
                  >
-                   {[1, 2, 3].map(gen => (
+                   {[0, 1, 2, 3].map(gen => (
                      <button
                        key={gen}
                        onClick={() => {
@@ -1105,7 +1111,7 @@ export default function App() {
                          generationFilter === gen ? "bg-indigo-50 text-indigo-600" : "text-slate-600 hover:bg-slate-50"
                        )}
                      >
-                       <span>نسل {gen}</span>
+                       <span>{gen === 0 ? "همه" : `نسل ${gen}`}</span>
                        {generationFilter === gen && <CheckCircle2 className="w-3 h-3" />}
                      </button>
                    ))}

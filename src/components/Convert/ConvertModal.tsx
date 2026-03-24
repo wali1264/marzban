@@ -16,8 +16,17 @@ interface ConvertModalProps {
 export default function ConvertModal({ isOpen, onClose, parcel, division, points, onConvert }: ConvertModalProps) {
   const [isProcessing, setIsProcessing] = React.useState(false);
 
+  const totalPercentage = React.useMemo(() => {
+    return parcel.divisions.reduce((sum, d) => sum + d.percentage, 0);
+  }, [parcel.divisions]);
+
+  const isComplete = Math.abs(totalPercentage - 100) < 0.01;
+
   const handleConvert = () => {
+    if (!isComplete) return;
     setIsProcessing(true);
+    
+    const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
     
     const newPoints: Point[] = [];
     const newPointIds: string[] = [];
@@ -47,7 +56,7 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
             newPointIds.push(existingPoint.id);
           }
         } else {
-          const newId = Math.random().toString(36).substr(2, 9);
+          const newId = generateId();
           const newPoint: Point = {
             id: newId,
             lng: coord[1],
@@ -65,7 +74,7 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
     const totalArea = turf.area(turf.featureCollection(allPolygons));
 
     const newParcel: Parcel = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: generateId(),
       name: `قطعه تفکیکی از ${parcel.ownerName || 'زمین اصلی'}`,
       pointIds: newPointIds,
       divisions: [],
@@ -129,15 +138,22 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
 
               <div className="flex items-start gap-3 p-4 bg-amber-50 rounded-2xl border border-amber-100">
                 <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                <p className="text-xs text-amber-800 leading-relaxed">
-                  با تایید این عملیات، نقاط جدیدی در محل تقاطع مرزها ایجاد شده و این سهم به یک قطعه مستقل با شناسنامه مجزا تبدیل خواهد شد.
-                </p>
+                <div className="space-y-1">
+                  <p className="text-xs text-amber-800 leading-relaxed">
+                    با تایید این عملیات، نقاط جدیدی در محل تقاطع مرزها ایجاد شده و این سهم به یک قطعه مستقل با شناسنامه مجزا تبدیل خواهد شد.
+                  </p>
+                  {!isComplete && (
+                    <p className="text-[10px] text-red-600 font-bold">
+                      هشدار: مجموع سهام باید ۱۰۰٪ باشد (فعلاً {totalPercentage}٪). ابتدا تمام سهام را تعریف کنید.
+                    </p>
+                  )}
+                </div>
               </div>
 
               <button
                 onClick={handleConvert}
-                disabled={isProcessing}
-                className="w-full py-5 bg-emerald-600 text-white rounded-[24px] font-bold shadow-xl shadow-emerald-200 hover:bg-emerald-700 transition-all active:scale-95 flex items-center justify-center gap-3 disabled:opacity-50 disabled:scale-100"
+                disabled={isProcessing || !isComplete}
+                className="w-full py-5 bg-emerald-600 text-white rounded-[24px] font-bold shadow-xl shadow-emerald-200 hover:bg-emerald-700 transition-all active:scale-95 flex items-center justify-center gap-3 disabled:opacity-50 disabled:scale-100 disabled:bg-slate-400 disabled:shadow-none"
               >
                 {isProcessing ? (
                   <>

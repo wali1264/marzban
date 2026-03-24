@@ -319,7 +319,7 @@ export default function MapView({
   const visibleConnectionIds = useMemo(() => {
     const ids = new Set<string>();
     cyclesWithGen.forEach(item => {
-      if (item.gen === generationFilter) {
+      if (generationFilter === 0 || item.gen === generationFilter) {
         item.connectionIds.forEach(id => ids.add(id));
       }
     });
@@ -389,7 +389,7 @@ export default function MapView({
       const { cycle, gen, poly, hasChildren } = item;
       
       // Strict generation filtering
-      if (gen !== generationFilter) return null;
+      if (generationFilter !== 0 && gen !== generationFilter) return null;
 
       const area = calculatePolygonArea(cycle);
       
@@ -405,7 +405,8 @@ export default function MapView({
       
       // Hide area card if the parcel has children (it's a parent in the current view)
       // This ensures we only see the "active" units for the current generation
-      const showAreaCard = isVisible && shouldShowDetails;
+      // In "All" mode, we hide the card if it has children to avoid clutter
+      const showAreaCard = isVisible && shouldShowDetails && (generationFilter !== 0 || !hasChildren);
       
       // Calculate centroid for precise positioning
       const centroid = turf.centroid(poly);
