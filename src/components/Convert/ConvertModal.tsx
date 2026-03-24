@@ -2,6 +2,7 @@ import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Box, X, CheckCircle2, AlertCircle, Zap, MapPin } from 'lucide-react';
 import { Point, Parcel, Division } from '../../types';
+import { calculatePolygonArea } from '../../utils';
 import * as turf from '@turf/turf';
 
 interface ConvertModalProps {
@@ -10,7 +11,7 @@ interface ConvertModalProps {
   parcel: Parcel;
   division: Division;
   points: Point[];
-  onConvert: (newPoints: Point[], newParcel: Parcel) => void;
+  onConvert: (newPoints: Point[], newParcels: Parcel[]) => void;
 }
 
 export default function ConvertModal({ isOpen, onClose, parcel, division, points, onConvert }: ConvertModalProps) {
@@ -33,21 +34,20 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
     
     const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
     
-    const newPoints: Point[] = [];
-    const newPointIds: string[] = [];
-    const addedPointIdsSet = new Set<string>();
+    const allNewPoints: Point[] = [];
+    const newParcels: Parcel[] = [];
     
-    // Optimization: Create a spatial index (simple grid) for existing points
-    // to avoid O(N*M) distance calculations.
-    // For 1cm precision, we can use a grid of ~1cm.
-    // 0.0000001 degrees is roughly 1cm.
+    // Global point grid to reuse points across all parts
     const pointGrid = new Map<string, string>();
     points.forEach(p => {
       const key = `${Math.round(p.lng * 10000000)},${Math.round(p.lat * 10000000)}`;
       pointGrid.set(key, p.id);
     });
 
-    division.geometry.forEach((part) => {
+    division.geometry.forEach((part, partIdx) => {
+      const partPointIds: string[] = [];
+      const addedInThisPart = new Set<string>();
+
       part.forEach((coord, index) => {
         // Skip the last point if it's the same as the first (closed loop)
         if (index === part.length - 1 && 
@@ -56,15 +56,13 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
           return;
         }
 
-        // Check if any of these coordinates already match existing points
-        // using the grid lookup (O(1) average case)
         const key = `${Math.round(coord[1] * 10000000)},${Math.round(coord[0] * 10000000)}`;
         const existingPointId = pointGrid.get(key);
 
         if (existingPointId) {
-          if (!addedPointIdsSet.has(existingPointId)) {
-            newPointIds.push(existingPointId);
-            addedPointIdsSet.add(existingPointId);
+          if (!addedInThisPart.has(existingPointId)) {
+            partPointIds.push(existingPointId);
+            addedInThisPart.add(existingPointId);
           }
         } else {
           const newId = generateId();
@@ -73,29 +71,39 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
             lng: coord[1],
             lat: coord[0],
             timestamp: Date.now(),
-            accuracy: 0.1 // High precision generated point
+            accuracy: 0.1
           };
-          newPoints.push(newPoint);
-          newPointIds.push(newId);
-          addedPointIdsSet.add(newId);
-          // Add to grid to avoid duplicates within the same geometry
+          allNewPoints.push(newPoint);
+          partPointIds.push(newId);
+          addedInThisPart.add(newId);
           pointGrid.set(key, newId);
         }
       });
+
+      if (partPointIds.length >= 3) {
+        const partArea = calculatePolygonArea(
+          partPointIds.map(id => {
+            const p = allNewPoints.find(pt => pt.id === id) || points.find(pt => pt.id === id);
+            return p!;
+          })
+        );
+
+        newParcels.push({
+          id: generateId(),
+          name: division.geometry.length > 1 
+            ? `قطعه ${partIdx + 1} از ${parcel.ownerName || 'زمین اصلی'}`
+            : `قطعه تفکیکی از ${parcel.ownerName || 'زمین اصلی'}`,
+          pointIds: partPointIds,
+          divisions: [],
+          area: partArea,
+          ownerName: parcel.ownerName,
+          generation: (parcel.generation || 1) + 1,
+          createdAt: Date.now()
+        });
+      }
     });
 
-    const newParcel: Parcel = {
-      id: generateId(),
-      name: `قطعه تفکیکی از ${parcel.ownerName || 'زمین اصلی'}`,
-      pointIds: newPointIds,
-      divisions: [],
-      area: divisionArea,
-      ownerName: parcel.ownerName, // Carry over owner if exists
-      generation: (parcel.generation || 1) + 1,
-      createdAt: Date.now()
-    };
-
-    onConvert(newPoints, newParcel);
+    onConvert(allNewPoints, newParcels);
     setIsProcessing(false);
     onClose();
   };

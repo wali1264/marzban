@@ -312,6 +312,7 @@ export default function MapView({
         for (const other of allPolys) {
           if (item === other) continue;
           try {
+            // Use a small buffer or booleanContains for more robust containment check
             if (turf.booleanPointInPolygon(itemCentroid, other.poly)) {
               containers++;
             }
@@ -325,6 +326,7 @@ export default function MapView({
         if (item === other) return false;
         try {
           const otherCentroid = turf.centroid(other.poly);
+          // If other is inside item, then item has children
           return turf.booleanPointInPolygon(otherCentroid, item.poly);
         } catch (e) {
           return false;
@@ -338,7 +340,13 @@ export default function MapView({
   const visibleConnectionIds = useMemo(() => {
     const ids = new Set<string>();
     cyclesWithGen.forEach(item => {
-      if (generationFilter === 0 || item.gen === generationFilter) {
+      // If filter is 0 (All), we only show connections of parcels that HAVE NO CHILDREN
+      // to avoid seeing internal lines of parent parcels when not needed.
+      if (generationFilter === 0) {
+        if (!item.hasChildren) {
+          item.connectionIds.forEach(id => ids.add(id));
+        }
+      } else if (item.gen === generationFilter) {
         item.connectionIds.forEach(id => ids.add(id));
       }
     });
@@ -409,8 +417,12 @@ export default function MapView({
       
       // Strict generation filtering with Ghost support
       const isGhost = generationFilter !== 0 && gen < generationFilter;
-      if (generationFilter !== 0 && gen > generationFilter) return null;
-      if (isGhost && !hasChildren) return null; // Only show parents of the current generation
+      if (generationFilter === 0) {
+        if (hasChildren) return null; // Only show leaf parcels when "All" is selected
+      } else {
+        if (gen > generationFilter) return null;
+        if (isGhost && !hasChildren) return null; // Only show parents of the current generation
+      }
 
       const area = calculatePolygonArea(cycle);
       

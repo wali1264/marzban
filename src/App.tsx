@@ -132,6 +132,8 @@ export default function App() {
 
   // Clean up parcels that are no longer valid cycles
   useEffect(() => {
+    if (isUpdating) return; // Skip during restore or bulk updates
+    
     if (points.length === 0 || connections.length === 0) {
       if (parcels.length > 0) setParcels([]);
       return;
@@ -146,15 +148,17 @@ export default function App() {
       // 1. Keep existing parcels that are still valid cycles
       // OR have user-provided data (name, owner, divisions)
       const stillValid = prev.filter(p => {
+        // Check if all its points still exist in the points array
+        const allPointsExist = p.pointIds.every(id => pointMap.has(id));
+        if (!allPointsExist) return false;
+
         // If it's a minimal cycle found by the algorithm, it's definitely valid
         if (cycleIds.has(p.pointIds.sort().join(','))) return true;
         
-        // If it has user data, we MUST keep it as long as its points exist
-        const hasUserData = p.name || p.ownerName || p.divisions.length > 0 || (p.generation || 1) > 1;
-        if (hasUserData) {
-          // Check if all its points still exist in the points array
-          return p.pointIds.every(id => pointMap.has(id));
-        }
+        // Keep it if it has user data OR it's a parent parcel (has divisions or is fully allocated)
+        // OR if it's a Gen 1 parcel (we should be very careful about deleting Gen 1)
+        const hasUserData = p.name || p.ownerName || p.divisions.length > 0 || (p.generation || 1) > 1 || p.isFullyAllocated;
+        if (hasUserData || p.generation === 1) return true;
         
         return false;
       });
@@ -989,12 +993,25 @@ export default function App() {
   };
 
   const handleRestore = (data: { points: Point[]; connections: Connection[]; parcels: Parcel[] }) => {
+    // Flag to prevent the useEffect from cleaning up during restore
+    setIsUpdating(true);
+    
+    // Ensure all restored parcels have at least generation 1 if missing
+    const sanitizedParcels = data.parcels.map(p => ({
+      ...p,
+      generation: p.generation || 1,
+      divisions: p.divisions || []
+    }));
+
     setPoints(data.points);
     setConnections(data.connections);
-    setParcels(data.parcels);
+    setParcels(sanitizedParcels);
+    
+    // Allow the UI to settle before re-enabling sync
+    setTimeout(() => setIsUpdating(false), 500);
   };
 
-  const handleConvertShare = (newPoints: Point[], newParcel: Parcel) => {
+  const handleConvertShare = (newPoints: Point[], newParcels: Parcel[]) => {
     // Add new points without removing old ones to preserve Gen 1
     setPoints(prev => [...prev, ...newPoints]);
     
@@ -1005,20 +1022,22 @@ export default function App() {
     ));
 
     const newConns: Connection[] = [];
-    for (let i = 0; i < newParcel.pointIds.length; i++) {
-      const fromId = newParcel.pointIds[i];
-      const toId = newParcel.pointIds[(i + 1) % newParcel.pointIds.length];
-      
-      const key = [fromId, toId].sort().join('-');
-      if (!existingConnSet.has(key)) {
-        newConns.push({
-          id: generateId(),
-          fromId,
-          toId
-        });
-        existingConnSet.add(key); // Prevent duplicates within the new set too
+    newParcels.forEach(p => {
+      for (let i = 0; i < p.pointIds.length; i++) {
+        const fromId = p.pointIds[i];
+        const toId = p.pointIds[(i + 1) % p.pointIds.length];
+        
+        const key = [fromId, toId].sort().join('-');
+        if (!existingConnSet.has(key)) {
+          newConns.push({
+            id: generateId(),
+            fromId,
+            toId
+          });
+          existingConnSet.add(key); // Prevent duplicates within the new set too
+        }
       }
-    }
+    });
     
     setConnections(prev => [...prev, ...newConns]);
     
@@ -1027,23 +1046,17 @@ export default function App() {
     setParcels(prev => {
       const updatedParcels = prev.map(p => {
         if (selectedParcelForConversion && p.id === selectedParcelForConversion.id && selectedDivisionForConversion) {
+          const remainingDivisions = p.divisions.filter(d => d.id !== selectedDivisionForConversion.id);
           return {
             ...p,
-            divisions: p.divisions.filter(d => d.id !== selectedDivisionForConversion.id),
-            isFullyAllocated: true // Lock the allocation state once conversion starts
+            divisions: remainingDivisions,
+            isFullyAllocated: remainingDivisions.length === 0 // Only fully allocated if no divisions left
           };
         }
         return p;
       });
 
-      const parcelWithTimestamp = {
-        ...newParcel,
-        id: generateId(),
-        parentId: selectedParcelForConversion?.id,
-        generation: (selectedParcelForConversion?.generation || 1) + 1,
-        createdAt: Date.now()
-      };
-      return [...updatedParcels, parcelWithTimestamp];
+      return [...updatedParcels, ...newParcels];
     });
     
     setShowConvertModal(false);
