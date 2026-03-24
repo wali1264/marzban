@@ -749,21 +749,19 @@ export default function App() {
         const previousCumulativeGeometries = splitPolygon(selectedCycle, currentTotal, parcelAngle);
         
         if (previousCumulativeGeometries.length > 0) {
-          // Robust conversion to Turf polygons with buffer(0) for precision cleaning
           const getPoly = (geoms: [number, number][][]) => {
             const features = geoms.map(g => {
               const coords = [...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]];
               return turf.polygon([coords as any]);
             });
             const union = turf.union(turf.featureCollection(features));
-            return union ? turf.buffer(union, 0) : null; // Clean geometry
+            return union ? turf.buffer(union, 0) : null;
           };
 
           const poly1 = getPoly(cumulativeGeometries);
           const poly2 = getPoly(previousCumulativeGeometries);
           
           if (poly1 && poly2) {
-            // Use a tiny buffer to ensure clean overlap for difference
             const diff = turf.difference(turf.featureCollection([poly1, poly2]));
             if (diff) {
               const cleanDiff = turf.buffer(diff, 0);
@@ -779,7 +777,6 @@ export default function App() {
         }
       } catch (error) {
         console.error("Geometry precision error:", error);
-        // If precision fails, we still use the same Turf-based cumulative logic to maintain consistency
       }
     }
     
@@ -875,30 +872,45 @@ export default function App() {
     let previousCumulativeGeometries: [number, number][][] | null = null;
 
     const newDivisions = updatedDivisions.map(div => {
-      // "Water Level" logic: Pour cumulative volume and subtract previous volume
       const cumulativeGeometries = splitPolygon(cycle, div.percentage + currentTotal, parcelAngle);
       let finalGeometries = cumulativeGeometries;
 
       if (previousCumulativeGeometries) {
-        // Convert geometries to turf features for subtraction
-        const poly1 = turf.union(turf.featureCollection(cumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
-        const poly2 = turf.union(turf.featureCollection(previousCumulativeGeometries.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]))));
-        
-        if (poly1 && poly2) {
-          const diff = turf.difference(turf.featureCollection([poly1, poly2]));
-          if (diff) {
-            if (diff.geometry.type === 'Polygon') {
-              finalGeometries = [diff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
-            } else if (diff.geometry.type === 'MultiPolygon') {
-              finalGeometries = diff.geometry.coordinates.map(p => p[0].map(c => [c[1], c[0]] as [number, number]));
+        try {
+          const getPoly = (geoms: [number, number][][]) => {
+            const features = geoms.map(g => {
+              const coords = [...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]];
+              return turf.polygon([coords as any]);
+            });
+            const union = turf.union(turf.featureCollection(features));
+            return union ? turf.buffer(union, 0) : null;
+          };
+
+          const poly1 = getPoly(cumulativeGeometries);
+          const poly2 = getPoly(previousCumulativeGeometries);
+          
+          if (poly1 && poly2) {
+            const diff = turf.difference(turf.featureCollection([poly1, poly2]));
+            if (diff) {
+              const cleanDiff = turf.buffer(diff, 0);
+              if (cleanDiff) {
+                if (cleanDiff.geometry.type === 'Polygon') {
+                  finalGeometries = [cleanDiff.geometry.coordinates[0].map(c => [c[1], c[0]] as [number, number])];
+                } else if (cleanDiff.geometry.type === 'MultiPolygon') {
+                  finalGeometries = cleanDiff.geometry.coordinates.map(p => p[0].map(c => [c[1], c[0]] as [number, number]));
+                }
+              }
             }
           }
+        } catch (e) {
+          console.error("Recalculate precision error:", e);
         }
       }
 
       previousCumulativeGeometries = cumulativeGeometries;
+      const result = { ...div, geometry: finalGeometries };
       currentTotal += div.percentage;
-      return { ...div, geometry: finalGeometries };
+      return result;
     });
 
     return { ...parcel, divisions: newDivisions };
@@ -1031,22 +1043,31 @@ export default function App() {
       newConns.push({
         id: Math.random().toString(36).substr(2, 9),
         fromId,
-        toId,
-        createdAt: Date.now()
+        toId
       });
     }
     
     setConnections(prev => [...prev, ...newConns]);
     
     // Add the new Gen 2 parcel to the list as an independent entity
-    // We do NOT remove the division from the original parcel to preserve Gen 1
+    // AND remove the division from the original parcel in Gen 1
     setParcels(prev => {
+      const updatedParcels = prev.map(p => {
+        if (selectedParcelForConversion && p.id === selectedParcelForConversion.id && selectedDivisionForConversion) {
+          return {
+            ...p,
+            divisions: p.divisions.filter(d => d.id !== selectedDivisionForConversion.id)
+          };
+        }
+        return p;
+      });
+
       const parcelWithTimestamp = {
         ...newParcel,
         id: Math.random().toString(36).substr(2, 9),
         createdAt: Date.now()
       };
-      return [...prev, parcelWithTimestamp];
+      return [...updatedParcels, parcelWithTimestamp];
     });
     
     setShowConvertModal(false);
