@@ -256,17 +256,40 @@ export default function MapView({
   }, [parcels]);
 
   const cyclesWithGen = useMemo(() => {
-    const polys = cycles.map(cycle => {
-      const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
-      return { 
-        cycle, 
+    // 1. Start with all manually defined parcels
+    const parcelItems = parcels.map(p => {
+      const cycle = p.pointIds.map(id => pointMap.get(id)!).filter(Boolean);
+      if (cycle.length < 3) return null;
+      const coords = [...cycle.map(pt => [pt.lng, pt.lat]), [cycle[0].lng, cycle[0].lat]];
+      return {
+        cycle,
         poly: turf.polygon([coords as any]),
-        connectionIds: new Set<string>()
+        connectionIds: new Set<string>(),
+        parcel: p,
+        id: p.id
+      };
+    }).filter((p): p is NonNullable<typeof p> => !!p);
+
+    // 2. Add any newly detected cycles that aren't already parcels
+    const existingParcelCycleIds = new Set(parcels.map(p => [...p.pointIds].sort().join(',')));
+    const detectedCycles = cycles.filter(cycle => {
+      const id = cycle.map(p => p.id).sort().join(',');
+      return !existingParcelCycleIds.has(id);
+    }).map(cycle => {
+      const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
+      return {
+        cycle,
+        poly: turf.polygon([coords as any]),
+        connectionIds: new Set<string>(),
+        parcel: null,
+        id: cycle.map(p => p.id).sort().join(',')
       };
     });
 
+    const allPolys = [...parcelItems, ...detectedCycles];
+
     // Map connections to their IDs for easy lookup
-    polys.forEach(item => {
+    allPolys.forEach(item => {
       for (let i = 0; i < item.cycle.length; i++) {
         const p1 = item.cycle[i];
         const p2 = item.cycle[(i + 1) % item.cycle.length];
@@ -278,33 +301,27 @@ export default function MapView({
       }
     });
 
-    return polys.map(item => {
-      const parcelId = item.cycle.map(p => p.id).sort().join(',');
-      const existingParcel = parcelMap.get(parcelId);
-      
-      let gen = existingParcel?.generation;
+    return allPolys.map(item => {
+      let gen = item.parcel?.generation;
       
       if (!gen) {
         // Count how many other polygons contain this one
         let containers = 0;
         const itemCentroid = turf.centroid(item.poly);
         
-        for (const other of polys) {
+        for (const other of allPolys) {
           if (item === other) continue;
           try {
-            // Use centroid check for more robust land division generation detection
             if (turf.booleanPointInPolygon(itemCentroid, other.poly)) {
               containers++;
             }
-          } catch (e) {
-            // Fallback
-          }
+          } catch (e) {}
         }
         gen = containers + 1;
       }
       
       // Check if this cycle has children (other cycles contained within it)
-      const hasChildren = polys.some(other => {
+      const hasChildren = allPolys.some(other => {
         if (item === other) return false;
         try {
           const otherCentroid = turf.centroid(other.poly);
@@ -316,7 +333,7 @@ export default function MapView({
       
       return { ...item, gen, hasChildren, layerId: `layer-gen-${gen}` };
     });
-  }, [cycles, connections, parcelMap]);
+  }, [cycles, connections, parcels, pointMap]);
 
   const visibleConnectionIds = useMemo(() => {
     const ids = new Set<string>();

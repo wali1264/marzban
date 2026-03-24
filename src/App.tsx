@@ -143,8 +143,21 @@ export default function App() {
     const cycleIds = new Set(cycleIdsToPoints.keys());
     
     setParcels(prev => {
-      // 1. Keep existing parcels that are still valid
-      const stillValid = prev.filter(p => cycleIds.has(p.pointIds.sort().join(',')));
+      // 1. Keep existing parcels that are still valid cycles
+      // OR have user-provided data (name, owner, divisions)
+      const stillValid = prev.filter(p => {
+        // If it's a minimal cycle found by the algorithm, it's definitely valid
+        if (cycleIds.has(p.pointIds.sort().join(','))) return true;
+        
+        // If it has user data, we MUST keep it as long as its points exist
+        const hasUserData = p.name || p.ownerName || p.divisions.length > 0 || (p.generation || 1) > 1;
+        if (hasUserData) {
+          // Check if all its points still exist in the points array
+          return p.pointIds.every(id => pointMap.has(id));
+        }
+        
+        return false;
+      });
       
       // 2. Identify new cycles
       const existingCycleIds = new Set(prev.map(p => p.pointIds.sort().join(',')));
