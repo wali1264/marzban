@@ -113,7 +113,10 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
                     {(() => {
                       const allPolygons = division.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
                       const area = turf.area(turf.featureCollection(allPolygons));
-                      return Math.round(area).toLocaleString();
+                      const integerPart = Math.floor(area);
+                      const decimalPart = Math.round((area - integerPart) * 100);
+                      if (decimalPart === 0) return integerPart.toLocaleString('fa-IR');
+                      return `${integerPart.toLocaleString('fa-IR')}/${decimalPart.toLocaleString('fa-IR')}`;
                     })()} متر مربع
                   </span>
                 </div>

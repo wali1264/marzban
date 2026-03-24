@@ -254,6 +254,7 @@ export default function MapView({
   }, [parcels]);
 
   const cyclesWithGen = useMemo(() => {
+    // 1. Start with cycles found by the algorithm
     const polys = cycles.map(cycle => {
       const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
       return { 
@@ -261,6 +262,24 @@ export default function MapView({
         poly: turf.polygon([coords as any]),
         connectionIds: new Set<string>()
       };
+    });
+
+    // 2. Add existing parcels that might have been missed by the algorithm (e.g. large parent cycles)
+    parcels?.forEach(p => {
+      const parcelId = p.pointIds.sort().join(',');
+      const alreadyFound = polys.some(item => item.cycle.map(pt => pt.id).sort().join(',') === parcelId);
+      
+      if (!alreadyFound) {
+        const cyclePoints = p.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean);
+        if (cyclePoints.length >= 3) {
+          const coords = [...cyclePoints.map(pt => [pt.lng, pt.lat]), [cyclePoints[0].lng, cyclePoints[0].lat]];
+          polys.push({
+            cycle: cyclePoints,
+            poly: turf.polygon([coords as any]),
+            connectionIds: new Set<string>()
+          });
+        }
+      }
     });
 
     // Map connections to their IDs for easy lookup
@@ -314,7 +333,7 @@ export default function MapView({
       
       return { ...item, gen, hasChildren, layerId: `layer-gen-${gen}` };
     });
-  }, [cycles, connections, parcelMap]);
+  }, [cycles, connections, parcelMap, parcels, points]);
 
   const visibleConnectionIds = useMemo(() => {
     const ids = new Set<string>();
@@ -391,7 +410,18 @@ export default function MapView({
       // Strict generation filtering
       if (gen !== generationFilter) return null;
 
-      const area = calculatePolygonArea(cycle);
+      // Calculate effective area by subtracting children's area
+      const childrenArea = cyclesWithGen
+        .filter(other => other.gen === gen + 1)
+        .filter(other => {
+          try {
+            const otherCentroid = turf.centroid(other.poly);
+            return turf.booleanPointInPolygon(otherCentroid, poly);
+          } catch (e) { return false; }
+        })
+        .reduce((sum, other) => sum + calculatePolygonArea(other.cycle), 0);
+
+      const area = calculatePolygonArea(cycle) - childrenArea;
       
       const parcelId = cycle.map(p => p.id).sort().join(',');
       const parcel = parcelMap.get(parcelId);
@@ -405,7 +435,7 @@ export default function MapView({
       
       // Hide area card if the parcel has children (it's a parent in the current view)
       // This ensures we only see the "active" units for the current generation
-      const showAreaCard = isVisible && shouldShowDetails;
+      const showAreaCard = isVisible && shouldShowDetails && area > 0.1;
       
       // Calculate centroid for precise positioning
       const centroid = turf.centroid(poly);

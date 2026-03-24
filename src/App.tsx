@@ -138,11 +138,28 @@ export default function App() {
     const cycleIds = new Set(cycleIdsToPoints.keys());
     
     setParcels(prev => {
-      // 1. Keep existing parcels that are still valid
-      const stillValid = prev.filter(p => cycleIds.has(p.pointIds.sort().join(',')));
+      // 1. Keep existing parcels that are still valid (boundary is intact)
+      // A parcel is valid if all its points exist and all its boundary connections exist
+      const stillValid = prev.filter(p => {
+        // Check if all points exist
+        const allPointsExist = p.pointIds.every(id => points.some(pt => pt.id === id));
+        if (!allPointsExist) return false;
+        
+        // Check if all connections exist in a cycle
+        for (let i = 0; i < p.pointIds.length; i++) {
+          const id1 = p.pointIds[i];
+          const id2 = p.pointIds[(i + 1) % p.pointIds.length];
+          const hasConn = connections.some(c => 
+            (c.fromId === id1 && c.toId === id2) || 
+            (c.fromId === id2 && c.toId === id1)
+          );
+          if (!hasConn) return false;
+        }
+        return true;
+      });
       
-      // 2. Identify new cycles
-      const existingCycleIds = new Set(prev.map(p => p.pointIds.sort().join(',')));
+      // 2. Identify new cycles found by the algorithm
+      const existingCycleIds = new Set(stillValid.map(p => p.pointIds.sort().join(',')));
       const newCycleIds = Array.from(cycleIds).filter(id => !existingCycleIds.has(id));
       
       if (newCycleIds.length === 0) {
@@ -185,7 +202,7 @@ export default function App() {
             ownerName: '',
             divisions: [],
             area: calculatePolygonArea(cyclePoints),
-            generation: 1,
+            generation: getGenerationForParcel(cyclePoints.map(p => p.id), prev),
             createdAt: Date.now()
           });
         }

@@ -49,7 +49,7 @@ export function findCycles(points: Point[], connections: Connection[]): Point[][
         continue;
       }
 
-      if (path.length > 200) continue; 
+      if (path.length > 20) continue; 
 
       const neighbors = adj.get(u) || [];
       for (const v of neighbors) {
