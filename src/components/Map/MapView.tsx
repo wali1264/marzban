@@ -289,26 +289,17 @@ export default function MapView({
         const itemArea = turf.area(itemPoly);
         
         existingParcel = parcels.find(p => {
-          // Area check with 5% tolerance or 10sqm (whichever is larger) for robustness
+          // Strict area check for identity (1% tolerance)
           const areaDiff = Math.abs(p.area - itemArea);
-          const tolerance = Math.max(10, p.area * 0.05);
-          if (areaDiff > tolerance) return false;
+          if (areaDiff > p.area * 0.01) return false;
 
           const pPoints = p.pointIds.map(id => points.find(pt => pt.id === id)).filter(Boolean);
           if (pPoints.length < 3) return false;
           const pCoords = [...pPoints.map(pt => [pt!.lng, pt!.lat]), [pPoints[0]!.lng, pPoints[0]!.lat]];
           const pPoly = turf.polygon([pCoords as any]);
           try {
-            // Use booleanEqual for topological identity
-            if (turf.booleanEqual(itemPoly, pPoly)) return true;
-            
-            // If not exactly equal, check if they overlap significantly (99% overlap)
-            const intersection = turf.intersect(turf.featureCollection([itemPoly, pPoly]));
-            if (intersection) {
-              const intersectArea = turf.area(intersection);
-              return intersectArea > Math.min(itemArea, p.area) * 0.99;
-            }
-            return false;
+            // Must be topologically equal to be the SAME parcel
+            return turf.booleanEqual(itemPoly, pPoly);
           } catch (e) { return false; }
         });
       }
@@ -317,6 +308,7 @@ export default function MapView({
       
       if (!gen) {
         const itemCentroid = turf.centroid(item.poly);
+        const itemArea = turf.area(item.poly);
         
         // Check if this cycle is inside an existing parcel to determine its generation
         // We look for the "deepest" parent (highest generation)
@@ -326,8 +318,9 @@ export default function MapView({
           const pCoords = [...pPoints.map(pt => [pt!.lng, pt!.lat]), [pPoints[0]!.lng, pPoints[0]!.lat]];
           const pPoly = turf.polygon([pCoords as any]);
           try {
-            // A parcel cannot be its own parent (geometric check)
-            if (turf.booleanEqual(itemPoly, pPoly)) return false;
+            // A parent must be significantly larger than its child (at least 2% larger)
+            // to avoid precision-induced self-parenting
+            if (p.area < itemArea * 1.02) return false;
             
             // Check if the cycle is inside this parcel
             return turf.booleanPointInPolygon(itemCentroid, pPoly);
@@ -480,7 +473,7 @@ export default function MapView({
       
       // Visibility logic for the parcel itself
       const isVisibleInCurrentFilter = generationFilter === 0 
-        ? (!hasChildren && !parcel?.isConverted) // Unified view: only show leaf nodes
+        ? !hasChildren // Unified view: show ONLY the top-most layer (leaf nodes)
         : (gen === generationFilter); // Generation view: show everything in that generation
 
       if (!isVisibleInCurrentFilter) return null;
