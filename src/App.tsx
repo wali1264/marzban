@@ -141,11 +141,10 @@ export default function App() {
     
     const pointMap = new Map<string, Point>(points.map(p => [p.id, p]));
     const currentCycles = findCycles(points, connections);
-    const cycleIdsToPoints = new Map(currentCycles.map(cycle => [cycle.map(p => p.id).sort().join(','), cycle]));
-    const cycleIds = new Set(cycleIdsToPoints.keys());
+    const cycleIds = new Set(currentCycles.map(cycle => cycle.map(p => p.id).sort().join(',')));
     
     setParcels(prev => {
-      // 1. Keep existing parcels that are still valid cycles
+      // Keep existing parcels that are still valid cycles
       // OR have user-provided data (name, owner, divisions)
       const stillValid = prev.filter(p => {
         // Check if all its points still exist in the points array
@@ -163,59 +162,25 @@ export default function App() {
         return false;
       });
       
-      // 2. Identify new cycles
-      const existingCycleIds = new Set(prev.map(p => p.pointIds.sort().join(',')));
-      const newCycleIds = Array.from(cycleIds).filter(id => !existingCycleIds.has(id));
-      
-      if (newCycleIds.length === 0) {
-        if (stillValid.length !== prev.length) return stillValid;
-        return prev;
-      }
-
-      // 3. Process new cycles
-      const newParcels: Parcel[] = [];
-      newCycleIds.forEach(id => {
-        const cyclePoints = cycleIdsToPoints.get(id)!;
-        const coords = [...cyclePoints.map(p => [p.lng, p.lat]), [cyclePoints[0].lng, cyclePoints[0].lat]];
-        const newPoly = turf.polygon([coords as any]);
-        
-        // Check if it's merged from old ones
-        const mergedFrom = prev.filter(old => {
-          const oldCycle = old.pointIds.map(pid => pointMap.get(pid)!).filter(Boolean);
-          if (oldCycle.length < 3) return false;
-          const oldCoords = [...oldCycle.map(p => [p.lng, p.lat]), [oldCycle[0].lng, oldCycle[0].lat]];
-          const oldPoly = turf.polygon([oldCoords as any]);
-          try {
-            return turf.booleanContains(newPoly, oldPoly);
-          } catch (e) { return false; }
-        });
-
-        if (mergedFrom.length > 0) {
-          const oldest = [...mergedFrom].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))[0];
-          newParcels.push({
-            ...oldest,
-            pointIds: cyclePoints.map(p => p.id),
-            area: calculatePolygonArea(cyclePoints),
-            generation: getGenerationForParcel(cyclePoints.map(p => p.id), prev, pointMap)
-          });
-        } else {
-          // Brand new cycle - Add as Gen 1
-          newParcels.push({
-            id: generateId(),
-            name: '',
-            pointIds: cyclePoints.map(p => p.id),
-            ownerName: '',
-            divisions: [],
-            area: calculatePolygonArea(cyclePoints),
-            generation: 1,
-            createdAt: Date.now()
-          });
-        }
-      });
-
-      return [...stillValid, ...newParcels];
+      if (stillValid.length !== prev.length) return stillValid;
+      return prev;
     });
   }, [connections, points]);
+
+  const handleFormParcel = (cycle: Point[]) => {
+    const pointMap = new Map<string, Point>(points.map(p => [p.id, p]));
+    const newParcel: Parcel = {
+      id: generateId(),
+      name: `قطعه ${parcels.length + 1}`,
+      pointIds: cycle.map(p => p.id),
+      ownerName: '',
+      divisions: [],
+      area: calculatePolygonArea(cycle),
+      generation: getGenerationForParcel(cycle.map(p => p.id), parcels, pointMap),
+      createdAt: Date.now()
+    };
+    setParcels(prev => [...prev, newParcel]);
+  };
 
   const [showDivisionModal, setShowDivisionModal] = useState(false);
   const [selectedCycle, setSelectedCycle] = useState<Point[] | null>(null);
@@ -1316,6 +1281,7 @@ export default function App() {
             }
           }}
           onDivisionLongPress={(pId, dId) => setPendingDivisionAction({ parcelId: pId, divId: dId, type: 'DELETE' })}
+          onFormParcel={handleFormParcel}
           userLocation={userLocation}
           showUserLocation={showUserLocation}
           selectedPointId={selectedPointId}

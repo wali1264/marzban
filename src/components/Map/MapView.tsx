@@ -30,6 +30,7 @@ interface MapViewProps {
   onPolygonClick?: (points: Point[]) => void;
   onDivisionClick?: (parcelId: string, divisionId: string) => void;
   onDivisionLongPress?: (parcelId: string, divisionId: string) => void;
+  onFormParcel?: (points: Point[]) => void;
   userLocation?: { lat: number; lng: number; accuracy: number };
   showUserLocation: boolean;
   selectedPointId: string | null;
@@ -214,6 +215,7 @@ export default function MapView({
   onPolygonClick,
   onDivisionClick,
   onDivisionLongPress,
+  onFormParcel,
   userLocation,
   showUserLocation,
   selectedPointId,
@@ -270,9 +272,9 @@ export default function MapView({
       };
     }).filter((p): p is NonNullable<typeof p> => !!p);
 
-    // 2. Add any newly detected cycles that aren't already parcels
+    // 2. Add any newly detected cycles that aren't already parcels (only in CONNECT mode)
     const existingParcelCycleIds = new Set(parcels.map(p => [...p.pointIds].sort().join(',')));
-    const detectedCycles = cycles.filter(cycle => {
+    const detectedCycles = mode === 'CONNECT' ? cycles.filter(cycle => {
       const id = cycle.map(p => p.id).sort().join(',');
       return !existingParcelCycleIds.has(id);
     }).map(cycle => {
@@ -282,11 +284,15 @@ export default function MapView({
         poly: turf.polygon([coords as any]),
         connectionIds: new Set<string>(),
         parcel: null,
-        id: cycle.map(p => p.id).sort().join(',')
+        id: cycle.map(p => p.id).sort().join(','),
+        isDetected: true
       };
-    });
+    }) : [];
 
-    const allPolys = [...parcelItems, ...detectedCycles];
+    const allPolys = [
+      ...parcelItems.map(p => ({ ...p, isDetected: false })), 
+      ...detectedCycles
+    ];
 
     // Map connections to their IDs for easy lookup
     allPolys.forEach(item => {
@@ -413,12 +419,16 @@ export default function MapView({
 
   const renderPolygons = () => {
     return cyclesWithGen.map((item, idx) => {
-      const { cycle, gen, poly, hasChildren } = item;
+      const { cycle, gen, poly, hasChildren, isDetected } = item;
       
       // Strict generation filtering with Ghost support
       const isGhost = generationFilter !== 0 && gen < generationFilter;
+      
+      // If it's a detected preview, we only show it in CONNECT mode
+      if (isDetected && mode !== 'CONNECT') return null;
+
       if (generationFilter === 0) {
-        if (hasChildren) return null; // Only show leaf parcels when "All" is selected
+        if (hasChildren && !isDetected) return null; // Only show leaf parcels when "All" is selected
       } else {
         if (gen > generationFilter) return null;
         if (isGhost && !hasChildren) return null; // Only show parents of the current generation
@@ -439,7 +449,7 @@ export default function MapView({
       // Hide area card if the parcel has children (it's a parent in the current view)
       // This ensures we only see the "active" units for the current generation
       // In "All" mode, we hide the card if it has children to avoid clutter
-      const showAreaCard = !isGhost && isVisible && shouldShowDetails && (generationFilter !== 0 || !hasChildren);
+      const showAreaCard = !isGhost && isVisible && shouldShowDetails && (generationFilter !== 0 || !hasChildren) && !isDetected;
       
       // Calculate centroid for precise positioning
       const centroid = turf.centroid(poly);
@@ -458,22 +468,30 @@ export default function MapView({
           <Polygon 
             positions={cycle.map(p => [p.lat, p.lng])}
             pathOptions={{
-              color: isGhost ? '#94a3b8' : (isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b')),
-              fillColor: isGhost ? 'transparent' : (isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b')),
-              fillOpacity: isGhost ? 0 : (isHighlighted ? 0.3 : 0.1),
-              weight: isGhost ? 1 : (isHighlighted ? 4 : 2),
-              dashArray: isGhost ? '5, 10' : (isHighlighted ? '10, 10' : undefined),
+              color: isDetected ? '#94a3b8' : (isGhost ? '#94a3b8' : (isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b'))),
+              fillColor: isDetected ? 'transparent' : (isGhost ? 'transparent' : (isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b'))),
+              fillOpacity: isDetected ? 0 : (isGhost ? 0 : (isHighlighted ? 0.3 : 0.1)),
+              weight: isDetected ? 1 : (isGhost ? 1 : (isHighlighted ? 4 : 2)),
+              dashArray: isDetected ? '5, 5' : (isGhost ? '5, 10' : (isHighlighted ? '10, 10' : undefined)),
               interactive: !isGhost
             }}
             eventHandlers={{
               click: (e) => {
-                if (!isGhost && (mode === 'DIVIDE' || mode === 'MANAGE' || mode === 'ROTATE') && onPolygonClick) {
-                  L.DomEvent.stopPropagation(e);
+                L.DomEvent.stopPropagation(e);
+                if (isDetected && onFormParcel) {
+                  onFormParcel(cycle);
+                } else if (!isGhost && (mode === 'DIVIDE' || mode === 'MANAGE' || mode === 'ROTATE') && onPolygonClick) {
                   onPolygonClick(cycle);
                 }
               }
             }}
-          />
+          >
+            {isDetected && (
+              <Tooltip sticky direction="top" className="bg-slate-800 text-white border-none rounded-lg px-2 py-1 text-[10px] font-bold">
+                کلیک برای تشکیل قطعه
+              </Tooltip>
+            )}
+          </Polygon>
 
           {/* Centered Marker for Tooltips (Area Card & Owner Name) */}
           <Marker 
