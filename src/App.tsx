@@ -691,14 +691,6 @@ export default function App() {
 
   const handlePolygonClick = (cycle: Point[]) => {
     if (mode === 'DIVIDE') {
-      const parcelId = cycle.map(p => p.id).sort().join(',');
-      const parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
-      
-      if (parcel?.isConverted) {
-        // Already converted, cannot divide further in this mode
-        return;
-      }
-      
       setSelectedCycle(cycle);
       setShowDivisionModal(true);
     } else if (mode === 'ROTATE') {
