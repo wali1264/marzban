@@ -48,6 +48,7 @@ export interface Parcel {
   isAngleSet?: boolean; // Whether the rotation angle has been confirmed
   generation?: number; // 1 for root, 2 for nested, etc.
   parentId?: string; // ID of the parent parcel if this is a division
+  isConverted?: boolean; // Whether its divisions have been materialized as independent parcels
   createdAt: number;
 }
 

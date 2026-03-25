@@ -8,9 +8,9 @@ interface ConvertModalProps {
   isOpen: boolean;
   onClose: () => void;
   parcel: Parcel;
-  division: Division;
+  division?: Division | null;
   points: Point[];
-  onConvert: (newPoints: Point[], newParcel: Parcel) => void;
+  onConvert: (newPoints: Point[], newParcels: Parcel[]) => void;
 }
 
 export default function ConvertModal({ isOpen, onClose, parcel, division, points, onConvert }: ConvertModalProps) {
@@ -28,63 +28,86 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
     
     const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
     
-    const newPoints: Point[] = [];
-    const newPointIds: string[] = [];
+    const allNewPoints: Point[] = [];
+    const allNewParcels: Parcel[] = [];
     
-    division.geometry.forEach((part) => {
-      part.forEach((coord, index) => {
-        // Skip the last point if it's the same as the first (closed loop)
-        if (index === part.length - 1 && 
-            coord[0] === part[0][0] && 
-            coord[1] === part[0][1]) {
-          return;
-        }
+    // Determine which divisions to convert
+    const divisionsToConvert = division ? [division] : parcel.divisions;
 
-        // Check if any of these coordinates already match existing points
-        // within a very small threshold (e.g., 1cm)
-        const existingPoint = points.find(p => {
-          const distance = turf.distance(
-            turf.point([p.lng, p.lat]),
-            turf.point([coord[1], coord[0]]), // Turf uses [lng, lat]
-            { units: 'meters' }
-          );
-          return distance < 0.01; // 1cm threshold
-        });
-
-        if (existingPoint) {
-          if (!newPointIds.includes(existingPoint.id)) {
-            newPointIds.push(existingPoint.id);
+    divisionsToConvert.forEach((div, divIdx) => {
+      const newPointIds: string[] = [];
+      
+      div.geometry.forEach((part) => {
+        part.forEach((coord, index) => {
+          // Skip the last point if it's the same as the first (closed loop)
+          if (index === part.length - 1 && 
+              coord[0] === part[0][0] && 
+              coord[1] === part[0][1]) {
+            return;
           }
-        } else {
-          const newId = generateId();
-          const newPoint: Point = {
-            id: newId,
-            lng: coord[1],
-            lat: coord[0],
-            timestamp: Date.now(),
-            accuracy: 0.1 // High precision generated point
-          };
-          newPoints.push(newPoint);
-          newPointIds.push(newId);
-        }
+
+          // Check if any of these coordinates already match existing points
+          // within a very small threshold (e.g., 1cm)
+          const existingPoint = points.find(p => {
+            const distance = turf.distance(
+              turf.point([p.lng, p.lat]),
+              turf.point([coord[1], coord[0]]), // Turf uses [lng, lat]
+              { units: 'meters' }
+            );
+            return distance < 0.01; // 1cm threshold
+          });
+
+          // Also check points we just created for previous divisions in this same batch
+          const justCreatedPoint = allNewPoints.find(p => {
+            const distance = turf.distance(
+              turf.point([p.lng, p.lat]),
+              turf.point([coord[1], coord[0]]),
+              { units: 'meters' }
+            );
+            return distance < 0.01;
+          });
+
+          if (existingPoint) {
+            if (!newPointIds.includes(existingPoint.id)) {
+              newPointIds.push(existingPoint.id);
+            }
+          } else if (justCreatedPoint) {
+            if (!newPointIds.includes(justCreatedPoint.id)) {
+              newPointIds.push(justCreatedPoint.id);
+            }
+          } else {
+            const newId = generateId();
+            const newPoint: Point = {
+              id: newId,
+              lng: coord[1],
+              lat: coord[0],
+              timestamp: Date.now(),
+              accuracy: 0.1 // High precision generated point
+            };
+            allNewPoints.push(newPoint);
+            newPointIds.push(newId);
+          }
+        });
       });
+
+      const allPolygons = div.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
+      const totalArea = turf.area(turf.featureCollection(allPolygons));
+
+      const newParcel: Parcel = {
+        id: generateId(),
+        name: `قطعه تفکیکی ${divIdx + 1} از ${parcel.ownerName || 'زمین اصلی'}`,
+        pointIds: newPointIds,
+        divisions: [],
+        area: totalArea,
+        ownerName: div.partnerId || parcel.ownerName, // Use partner name if available
+        generation: (parcel.generation || 1) + 1,
+        createdAt: Date.now()
+      };
+      
+      allNewParcels.push(newParcel);
     });
 
-    const allPolygons = division.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
-    const totalArea = turf.area(turf.featureCollection(allPolygons));
-
-    const newParcel: Parcel = {
-      id: generateId(),
-      name: `قطعه تفکیکی از ${parcel.ownerName || 'زمین اصلی'}`,
-      pointIds: newPointIds,
-      divisions: [],
-      area: totalArea,
-      ownerName: parcel.ownerName, // Carry over owner if exists
-      generation: (parcel.generation || 1) + 1,
-      createdAt: Date.now()
-    };
-
-    onConvert(newPoints, newParcel);
+    onConvert(allNewPoints, allNewParcels);
     setIsProcessing(false);
     onClose();
   };
@@ -110,29 +133,53 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
               <div className="w-20 h-20 bg-emerald-100 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-inner">
                 <Zap className="w-10 h-10 text-emerald-600" />
               </div>
-              <h2 className="text-2xl font-black text-slate-900 mb-2">تبدیل سهم به قطعه مستقل</h2>
+              <h2 className="text-2xl font-black text-slate-900 mb-2">
+                {division ? "تبدیل سهم به قطعه مستقل" : "تبدیل تمام سهام به قطعات مستقل"}
+              </h2>
               <p className="text-slate-500 text-sm">محاسبه مختصات دقیق و مادی‌سازی هندسه</p>
             </div>
 
             <div className="p-8 pt-0 space-y-6">
               <div className="bg-slate-50 rounded-3xl p-6 space-y-4 border border-slate-100">
+                {division ? (
+                  <>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">مساحت سهم:</span>
+                      <span className="font-bold text-slate-900">
+                        {(() => {
+                          const allPolygons = division.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
+                          const area = turf.area(turf.featureCollection(allPolygons));
+                          return Math.round(area).toLocaleString();
+                        })()} متر مربع
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">درصد از کل:</span>
+                      <span className="font-bold text-indigo-600">{division.percentage}٪</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">تعداد کل سهام:</span>
+                      <span className="font-bold text-slate-900">{parcel.divisions.length} سهم</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">مجموع مساحت:</span>
+                      <span className="font-bold text-emerald-600">
+                        {Math.round(parcel.area).toLocaleString()} متر مربع
+                      </span>
+                    </div>
+                  </>
+                )}
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-500">مساحت سهم:</span>
+                  <span className="text-slate-500">تعداد رئوس جدید:</span>
                   <span className="font-bold text-slate-900">
-                    {(() => {
-                      const allPolygons = division.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
-                      const area = turf.area(turf.featureCollection(allPolygons));
-                      return Math.round(area).toLocaleString();
-                    })()} متر مربع
+                    {division 
+                      ? division.geometry.reduce((sum, g) => sum + g.length - 1, 0)
+                      : parcel.divisions.reduce((sum, d) => sum + d.geometry.reduce((s, g) => s + g.length - 1, 0), 0)
+                    } نقطه
                   </span>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-500">درصد از کل:</span>
-                  <span className="font-bold text-indigo-600">{division.percentage}٪</span>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-500">تعداد رئوس:</span>
-                  <span className="font-bold text-slate-900">{division.geometry.reduce((sum, g) => sum + g.length - 1, 0)} نقطه</span>
                 </div>
               </div>
 
@@ -140,7 +187,7 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
                 <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
                 <div className="space-y-1">
                   <p className="text-xs text-amber-800 leading-relaxed">
-                    با تایید این عملیات، نقاط جدیدی در محل تقاطع مرزها ایجاد شده و این سهم به یک قطعه مستقل با شناسنامه مجزا تبدیل خواهد شد.
+                    با تایید این عملیات، {division ? "این سهم" : "تمام سهام این قطعه"} به صورت خودکار به قطعات مستقل با شناسنامه مجزا تبدیل خواهند شد.
                   </p>
                   {!isComplete && (
                     <p className="text-[10px] text-red-600 font-bold">
@@ -158,12 +205,12 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
                 {isProcessing ? (
                   <>
                     <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    در حال محاسبه مختصات...
+                    در حال مادی‌سازی...
                   </>
                 ) : (
                   <>
                     <Box className="w-5 h-5" />
-                    تایید و مادی‌سازی سهم
+                    {division ? "تایید و مادی‌سازی سهم" : "تایید و مادی‌سازی تمام سهام"}
                   </>
                 )}
               </button>

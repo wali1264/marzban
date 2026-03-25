@@ -729,6 +729,14 @@ export default function App() {
       setSelectedParcelForOwner(parcel);
       setOwnerNameInput(parcel.ownerName || '');
       setShowOwnerModal(true);
+    } else if (mode === 'CONVERT') {
+      const parcelId = cycle.map(p => p.id).sort().join(',');
+      const parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+      if (parcel && parcel.divisions.length > 0 && !parcel.isConverted) {
+        setSelectedParcelForConversion(parcel);
+        setSelectedDivisionForConversion(null);
+        setShowConvertModal(true);
+      }
     }
   };
 
@@ -1023,25 +1031,27 @@ export default function App() {
     setParcels(data.parcels);
   };
 
-  const handleConvertShare = (newPoints: Point[], newParcel: Parcel) => {
-    // Set flag to skip heavy auto-discovery since we are manually adding a valid parcel
+  const handleConvertShare = (newPoints: Point[], newParcels: Parcel[]) => {
+    // Set flag to skip heavy auto-discovery since we are manually adding valid parcels
     skipAutoDiscovery.current = true;
 
     // Add new points without removing old ones to preserve Gen 1
     setPoints(prev => [...prev, ...newPoints]);
     
-    // Create new connections for the Gen 2 parcel specifically
+    // Create new connections for the new parcels specifically
     const newConns: Connection[] = [];
-    for (let i = 0; i < newParcel.pointIds.length; i++) {
-      const fromId = newParcel.pointIds[i];
-      const toId = newParcel.pointIds[(i + 1) % newParcel.pointIds.length];
-      
-      newConns.push({
-        id: generateId(),
-        fromId,
-        toId
-      });
-    }
+    newParcels.forEach(p => {
+      for (let i = 0; i < p.pointIds.length; i++) {
+        const fromId = p.pointIds[i];
+        const toId = p.pointIds[(i + 1) % p.pointIds.length];
+        
+        newConns.push({
+          id: generateId(),
+          fromId,
+          toId
+        });
+      }
+    });
 
     // Topological Integrity: Split existing connections if new points lie on them
     // This ensures neighbors who shared the boundary now use the split segments
@@ -1079,27 +1089,28 @@ export default function App() {
       ...splitConns
     ]);
     
-    // Add the new Gen 2 parcel to the list as an independent entity
-    // AND remove the division from the original parcel in Gen 1
+    // Add the new parcels to the list as independent entities
+    // AND mark the original parcel as converted to preserve Gen 1 history
     setParcels(prev => {
       const updatedParcels = prev.map(p => {
-        if (selectedParcelForConversion && p.id === selectedParcelForConversion.id && selectedDivisionForConversion) {
+        if (selectedParcelForConversion && p.id === selectedParcelForConversion.id) {
           return {
             ...p,
-            divisions: p.divisions.filter(d => d.id !== selectedDivisionForConversion.id)
+            isConverted: true
           };
         }
         return p;
       });
 
-      const parcelWithTimestamp = {
-        ...newParcel,
+      const parcelsWithTimestamp = newParcels.map(p => ({
+        ...p,
         id: generateId(),
         parentId: selectedParcelForConversion?.id,
         generation: (selectedParcelForConversion?.generation || 1) + 1,
         createdAt: Date.now()
-      };
-      return [...updatedParcels, parcelWithTimestamp];
+      }));
+      
+      return [...updatedParcels, ...parcelsWithTimestamp];
     });
     
     setShowConvertModal(false);
@@ -1351,10 +1362,9 @@ export default function App() {
           onPolygonClick={handlePolygonClick}
           onDivisionClick={(pId, dId) => {
             const parcel = parcels.find(p => p.id === pId);
-            const division = parcel?.divisions.find(d => d.id === dId);
-            if (parcel && division) {
+            if (parcel && parcel.divisions.length > 0 && !parcel.isConverted) {
               setSelectedParcelForConversion(parcel);
-              setSelectedDivisionForConversion(division);
+              setSelectedDivisionForConversion(null); // Always convert all for consistency
               setShowConvertModal(true);
             }
           }}
@@ -2242,7 +2252,7 @@ export default function App() {
       />
 
       {/* Convert Share Modal */}
-      {selectedParcelForConversion && selectedDivisionForConversion && (
+      {selectedParcelForConversion && (
         <ConvertModal
           isOpen={showConvertModal}
           onClose={() => setShowConvertModal(false)}

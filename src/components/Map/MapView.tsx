@@ -433,7 +433,7 @@ export default function MapView({
             }}
             eventHandlers={{
               click: (e) => {
-                if ((mode === 'DIVIDE' || mode === 'MANAGE' || mode === 'ROTATE') && onPolygonClick) {
+                if ((mode === 'DIVIDE' || mode === 'MANAGE' || mode === 'ROTATE' || mode === 'CONVERT') && onPolygonClick) {
                   L.DomEvent.stopPropagation(e);
                   onPolygonClick(cycle);
                 }
