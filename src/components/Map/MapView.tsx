@@ -310,43 +310,47 @@ export default function MapView({
         const itemCentroid = turf.centroid(item.poly);
         const itemArea = turf.area(item.poly);
         
-        // Check if this cycle is inside an existing parcel to determine its generation
-        // We look for the "deepest" parent (highest generation)
+        // 1. Check database for parents
         const parentParcels = parcels.filter(p => {
           const pPoints = p.pointIds.map(id => points.find(pt => pt.id === id)).filter(Boolean);
           if (pPoints.length < 3) return false;
           const pCoords = [...pPoints.map(pt => [pt!.lng, pt!.lat]), [pPoints[0]!.lng, pPoints[0]!.lat]];
           const pPoly = turf.polygon([pCoords as any]);
           try {
-            // A parent must be significantly larger than its child (at least 2% larger)
-            // to avoid precision-induced self-parenting
+            // A parent must be significantly larger than its child
             if (p.area < itemArea * 1.02) return false;
-            
-            // Check if the cycle is inside this parcel
             return turf.booleanPointInPolygon(itemCentroid, pPoly);
           } catch (e) { return false; }
         });
 
         if (parentParcels.length > 0) {
-          // Use the generation of the deepest parent
           const deepestParent = parentParcels.reduce((prev, curr) => 
             (curr.generation || 1) > (prev.generation || 1) ? curr : prev
           );
           gen = (deepestParent.generation || 1) + 1;
         } else {
-          // If no parent parcel found, it's likely a top-level parcel (Gen 1)
-          gen = 1;
+          // 2. Fallback to geometric nesting in current cycles
+          let nesting = 0;
+          for (const other of polys) {
+            if (item === other) continue;
+            if (other.area > itemArea * 1.05) {
+              try {
+                if (turf.booleanPointInPolygon(itemCentroid, other.poly)) {
+                  nesting++;
+                }
+              } catch (e) {}
+            }
+          }
+          gen = nesting + 1;
         }
       }
       
-      // Check if this cycle has children (other cycles contained within it)
+      // Check if this cycle has children (other cycles significantly smaller contained within it)
       const hasChildren = polys.some(other => {
         if (item === other) return false;
         
-        // Skip if they are topologically identical to avoid self-hiding
-        try {
-          if (turf.booleanEqual(item.poly, other.poly)) return false;
-        } catch (e) {}
+        // A child must be significantly smaller than its parent to avoid precision issues
+        if (other.area >= item.area * 0.95) return false;
 
         try {
           const otherCentroid = turf.centroid(other.poly);
@@ -375,7 +379,19 @@ export default function MapView({
       
       return points.filter(p => activePointIds.has(p.id) || !pointsInCycles.has(p.id));
     }
-    return points.filter(p => (p.generation || 1) === generationFilter);
+    
+    // Generation filter: show points belonging to that generation's cycles
+    const genPointIds = new Set<string>();
+    cyclesWithGen.forEach(item => {
+      if (item.gen === generationFilter) {
+        item.cycle.forEach(p => genPointIds.add(p.id));
+      }
+    });
+    
+    return points.filter(p => 
+      genPointIds.has(p.id) || 
+      (p.generation || 1) === generationFilter
+    );
   }, [points, generationFilter, cyclesWithGen]);
 
   const filteredConnections = useMemo(() => {
@@ -393,7 +409,19 @@ export default function MapView({
       
       return connections.filter(c => activeConnIds.has(c.id) || !connsInCycles.has(c.id));
     }
-    return connections.filter(c => (c.generation || 1) === generationFilter);
+    
+    // Generation filter: show connections belonging to that generation's cycles
+    const genConnIds = new Set<string>();
+    cyclesWithGen.forEach(item => {
+      if (item.gen === generationFilter) {
+        item.connectionIds.forEach(id => genConnIds.add(id));
+      }
+    });
+    
+    return connections.filter(c => 
+      genConnIds.has(c.id) || 
+      (c.generation || 1) === generationFilter
+    );
   }, [connections, generationFilter, cyclesWithGen]);
 
   const visibleConnectionIds = useMemo(() => {
@@ -497,7 +525,7 @@ export default function MapView({
       
       const showAreaCard = isVisible && shouldShowDetails && 
         (generationFilter !== 0 || !hasChildren) && 
-        (isRealParcel || isTopLevel || isDividing);
+        (isRealParcel || isTopLevel || isDividing || (generationFilter === 0 && !hasChildren));
       
       // Calculate centroid for precise positioning
       const centroid = turf.centroid(poly);
