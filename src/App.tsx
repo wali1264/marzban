@@ -167,10 +167,6 @@ export default function App() {
         const pPoly = turf.polygon([pCoords as any]);
         
         const geometricMatch = currentCycles.find(cycle => {
-          // Only match within the same generation to preserve layer integrity
-          const cycleGen = cycle[0]?.generation || 1;
-          if (cycleGen !== (p.generation || 1)) return false;
-
           const cCoords = [...cycle.map(pt => [pt.lng, pt.lat]), [cycle[0].lng, cycle[0].lat]];
           const cPoly = turf.polygon([cCoords as any]);
           try {
@@ -691,6 +687,12 @@ export default function App() {
 
   const handlePolygonClick = (cycle: Point[]) => {
     if (mode === 'DIVIDE') {
+      const parcelId = cycle.map(p => p.id).sort().join(',');
+      const parcel = parcels.find(p => p.pointIds.sort().join(',') === parcelId);
+      if (parcel?.isConverted) {
+        alert("این زمین قبلاً تفکیک شده و به قطعات مستقل تبدیل شده است.");
+        return;
+      }
       setSelectedCycle(cycle);
       setShowDivisionModal(true);
     } else if (mode === 'ROTATE') {

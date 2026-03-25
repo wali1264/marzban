@@ -256,9 +256,11 @@ export default function MapView({
   const cyclesWithGen = useMemo(() => {
     const polys = cycles.map(cycle => {
       const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
+      const poly = turf.polygon([coords as any]);
       return { 
         cycle, 
-        poly: turf.polygon([coords as any]),
+        poly,
+        area: turf.area(poly),
         connectionIds: new Set<string>()
       };
     });
@@ -278,27 +280,57 @@ export default function MapView({
 
     return polys.map(item => {
       const parcelId = item.cycle.map(p => p.id).sort().join(',');
-      const existingParcel = parcelMap.get(parcelId);
+      let existingParcel = parcelMap.get(parcelId);
+      
+      // Fallback to geometric matching if ID matching fails (e.g. boundary split)
+      if (!existingParcel) {
+        const coords = [...item.cycle.map(p => [p.lng, p.lat]), [item.cycle[0].lng, item.cycle[0].lat]];
+        const itemPoly = turf.polygon([coords as any]);
+        const itemArea = turf.area(itemPoly);
+        
+        existingParcel = parcels.find(p => {
+          if (Math.abs(p.area - itemArea) > 1) return false; // Area mismatch
+          const pPoints = p.pointIds.map(id => points.find(pt => pt.id === id)).filter(Boolean);
+          if (pPoints.length < 3) return false;
+          const pCoords = [...pPoints.map(pt => [pt!.lng, pt!.lat]), [pPoints[0]!.lng, pPoints[0]!.lat]];
+          const pPoly = turf.polygon([pCoords as any]);
+          try {
+            return turf.booleanEqual(itemPoly, pPoly);
+          } catch (e) { return false; }
+        });
+      }
       
       let gen = existingParcel?.generation;
       
       if (!gen) {
-        // Count how many other polygons contain this one
-        let containers = 0;
         const itemCentroid = turf.centroid(item.poly);
         
-        for (const other of polys) {
-          if (item === other) continue;
+        // Check if this cycle is inside an existing parcel to determine its generation
+        const parentParcel = parcels.find(p => {
+          const pPoints = p.pointIds.map(id => points.find(pt => pt.id === id)).filter(Boolean);
+          if (pPoints.length < 3) return false;
+          const pCoords = [...pPoints.map(pt => [pt!.lng, pt!.lat]), [pPoints[0]!.lng, pPoints[0]!.lat]];
+          const pPoly = turf.polygon([pCoords as any]);
           try {
-            // Use centroid check for more robust land division generation detection
-            if (turf.booleanPointInPolygon(itemCentroid, other.poly)) {
-              containers++;
-            }
-          } catch (e) {
-            // Fallback
+            return turf.booleanPointInPolygon(itemCentroid, pPoly);
+          } catch (e) { return false; }
+        });
+
+        if (parentParcel) {
+          gen = parentParcel.generation + 1;
+        } else {
+          // Fallback to counting containers in current cycles
+          let containers = 0;
+          for (const other of polys) {
+            if (item === other) continue;
+            try {
+              if (turf.booleanPointInPolygon(itemCentroid, other.poly)) {
+                containers++;
+              }
+            } catch (e) {}
           }
+          gen = containers + 1;
         }
-        gen = containers + 1;
       }
       
       // Check if this cycle has children (other cycles contained within it)
@@ -422,19 +454,20 @@ export default function MapView({
   }), []);
 
   const renderPolygons = () => {
-    return cyclesWithGen.map((item, idx) => {
+    return [...cyclesWithGen]
+      .sort((a, b) => b.area - a.area)
+      .map((item, idx) => {
       const { cycle, gen, poly, hasChildren } = item;
+      const parcelId = cycle.map(p => p.id).sort().join(',');
+      const parcel = parcelMap.get(parcelId);
       
       // Strict generation filtering
       if (generationFilter !== 0 && gen !== generationFilter) return null;
 
-      // In "All" mode, hide if it has children (Unified Reality) to show only the latest generation
-      if (generationFilter === 0 && hasChildren) return null;
+      // In "All" mode, hide if it has children (Unified Reality) OR if it's a converted parent
+      if (generationFilter === 0 && (hasChildren || parcel?.isConverted)) return null;
 
       const area = calculatePolygonArea(cycle);
-      
-      const parcelId = cycle.map(p => p.id).sort().join(',');
-      const parcel = parcelMap.get(parcelId);
 
       // Visibility logic based on zoom
       const isVisible = zoom > 15;
@@ -446,7 +479,7 @@ export default function MapView({
       // Hide area card if the parcel has children (it's a parent in the current view)
       // This ensures we only see the "active" units for the current generation
       // In "All" mode, we hide the card if it has children to avoid clutter
-      const showAreaCard = isVisible && shouldShowDetails && (generationFilter !== 0 || !hasChildren);
+      const showAreaCard = isVisible && shouldShowDetails && !hasChildren;
       
       // Calculate centroid for precise positioning
       const centroid = turf.centroid(poly);
@@ -528,7 +561,7 @@ export default function MapView({
               </Tooltip>
             )}
           </Marker>
-          {parcel?.divisions.map(div => {
+          {!parcel?.isConverted && parcel?.divisions.map(div => {
             const center = getMultiCentroid(div.geometry);
             
             return (
