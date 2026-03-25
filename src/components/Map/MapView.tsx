@@ -289,13 +289,26 @@ export default function MapView({
         const itemArea = turf.area(itemPoly);
         
         existingParcel = parcels.find(p => {
-          if (Math.abs(p.area - itemArea) > 1) return false; // Area mismatch
+          // Area check with 5% tolerance or 10sqm (whichever is larger) for robustness
+          const areaDiff = Math.abs(p.area - itemArea);
+          const tolerance = Math.max(10, p.area * 0.05);
+          if (areaDiff > tolerance) return false;
+
           const pPoints = p.pointIds.map(id => points.find(pt => pt.id === id)).filter(Boolean);
           if (pPoints.length < 3) return false;
           const pCoords = [...pPoints.map(pt => [pt!.lng, pt!.lat]), [pPoints[0]!.lng, pPoints[0]!.lat]];
           const pPoly = turf.polygon([pCoords as any]);
           try {
-            return turf.booleanEqual(itemPoly, pPoly);
+            // Use booleanEqual for topological identity
+            if (turf.booleanEqual(itemPoly, pPoly)) return true;
+            
+            // If not exactly equal, check if they overlap significantly (99% overlap)
+            const intersection = turf.intersect(turf.featureCollection([itemPoly, pPoly]));
+            if (intersection) {
+              const intersectArea = turf.area(intersection);
+              return intersectArea > Math.min(itemArea, p.area) * 0.99;
+            }
+            return false;
           } catch (e) { return false; }
         });
       }
@@ -306,7 +319,11 @@ export default function MapView({
         const itemCentroid = turf.centroid(item.poly);
         
         // Check if this cycle is inside an existing parcel to determine its generation
-        const parentParcel = parcels.find(p => {
+        // We look for the "deepest" parent (highest generation)
+        const parentParcels = parcels.filter(p => {
+          // A parcel cannot be its own parent
+          if (parcelId === p.pointIds.sort().join(',')) return false;
+          
           const pPoints = p.pointIds.map(id => points.find(pt => pt.id === id)).filter(Boolean);
           if (pPoints.length < 3) return false;
           const pCoords = [...pPoints.map(pt => [pt!.lng, pt!.lat]), [pPoints[0]!.lng, pPoints[0]!.lat]];
@@ -316,26 +333,27 @@ export default function MapView({
           } catch (e) { return false; }
         });
 
-        if (parentParcel) {
-          gen = parentParcel.generation + 1;
+        if (parentParcels.length > 0) {
+          // Use the generation of the deepest parent
+          const deepestParent = parentParcels.reduce((prev, curr) => 
+            (curr.generation || 1) > (prev.generation || 1) ? curr : prev
+          );
+          gen = (deepestParent.generation || 1) + 1;
         } else {
-          // Fallback to counting containers in current cycles
-          let containers = 0;
-          for (const other of polys) {
-            if (item === other) continue;
-            try {
-              if (turf.booleanPointInPolygon(itemCentroid, other.poly)) {
-                containers++;
-              }
-            } catch (e) {}
-          }
-          gen = containers + 1;
+          // If no parent parcel found, it's likely a top-level parcel (Gen 1)
+          gen = 1;
         }
       }
       
       // Check if this cycle has children (other cycles contained within it)
       const hasChildren = polys.some(other => {
         if (item === other) return false;
+        
+        // Skip if they are topologically identical to avoid self-hiding
+        try {
+          if (turf.booleanEqual(item.poly, other.poly)) return false;
+        } catch (e) {}
+
         try {
           const otherCentroid = turf.centroid(other.poly);
           return turf.booleanPointInPolygon(otherCentroid, item.poly);
@@ -344,9 +362,9 @@ export default function MapView({
         }
       });
       
-      return { ...item, gen, hasChildren, layerId: `layer-gen-${gen}` };
+      return { ...item, gen, hasChildren, parcel: existingParcel, layerId: `layer-gen-${gen}` };
     });
-  }, [cycles, connections, parcelMap]);
+  }, [cycles, parcels, points, parcelMap]);
 
   const filteredPoints = useMemo(() => {
     if (generationFilter === 0) {
@@ -457,29 +475,28 @@ export default function MapView({
     return [...cyclesWithGen]
       .sort((a, b) => b.area - a.area)
       .map((item, idx) => {
-      const { cycle, gen, poly, hasChildren } = item;
-      const parcelId = cycle.map(p => p.id).sort().join(',');
-      const parcel = parcelMap.get(parcelId);
+      const { cycle, gen, poly, hasChildren, parcel } = item;
       
-      // Strict generation filtering
-      if (generationFilter !== 0 && gen !== generationFilter) return null;
+      // Visibility logic for the parcel itself
+      const isVisibleInCurrentFilter = generationFilter === 0 
+        ? (!hasChildren && !parcel?.isConverted) // Unified view: only show leaf nodes
+        : (gen === generationFilter); // Generation view: show everything in that generation
 
-      // In "All" mode, hide if it has children (Unified Reality) OR if it's a converted parent
-      if (generationFilter === 0 && (hasChildren || parcel?.isConverted)) return null;
+      if (!isVisibleInCurrentFilter) return null;
 
       const area = calculatePolygonArea(cycle);
 
-      // Visibility logic based on zoom
+      // Visibility logic for details based on zoom
       const isVisible = zoom > 15;
       const scale = Math.max(0.5, Math.min(1, (zoom - 14) / 4));
 
       // If a parcel is highlighted, only show its details
       const shouldShowDetails = !highlightedParcelId || highlightedParcelId === parcel?.id;
       
-      // Hide area card if the parcel has children (it's a parent in the current view)
-      // This ensures we only see the "active" units for the current generation
-      // In "All" mode, we hide the card if it has children to avoid clutter
-      const showAreaCard = isVisible && shouldShowDetails && !hasChildren;
+      // Area Card Visibility Logic:
+      // 1. In specific generation filters (Time Machine), ALWAYS show the card for that generation's parcels.
+      // 2. In "All" mode (Unified Reality), only show the card for leaf nodes (already handled by isVisibleInCurrentFilter).
+      const showAreaCard = isVisible && shouldShowDetails && (generationFilter !== 0 || !hasChildren);
       
       // Calculate centroid for precise positioning
       const centroid = turf.centroid(poly);
@@ -524,7 +541,7 @@ export default function MapView({
               <Tooltip permanent direction="center" className="area-tooltip">
                 <div className="relative flex items-center justify-center">
                   {/* Owner Name Watermark */}
-                  {parcel?.ownerName && (
+                  {(parcel?.ownerName || parcel?.name) && (
                     <div 
                       className="absolute font-black whitespace-nowrap pointer-events-none select-none transition-all duration-500 text-slate-900"
                       style={{ 
@@ -534,7 +551,7 @@ export default function MapView({
                         zIndex: 0
                       }}
                     >
-                      {parcel.ownerName}
+                      {parcel?.ownerName || parcel?.name}
                     </div>
                   )}
                   
@@ -556,6 +573,14 @@ export default function MapView({
                       </span>
                       <span className="text-[8px] text-slate-600 font-bold">متر مربع</span>
                     </div>
+                    {parcel && (
+                      <div className="flex items-center gap-1 border-t border-slate-50 mt-0.5 w-full justify-center">
+                        <span className="text-[7px] text-slate-400 font-medium">نسل {gen}</span>
+                        {parcel.isConverted && (
+                          <span className="text-[7px] text-amber-500 font-bold">تفكيك شده</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               </Tooltip>
