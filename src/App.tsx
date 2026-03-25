@@ -72,6 +72,7 @@ export default function App() {
   const [centerTrigger, setCenterTrigger] = useState(0);
   const [showUserLocation, setShowUserLocation] = useState(false);
 
+  const skipAutoDiscovery = useRef(false);
   const [parcels, setParcels] = useState<Parcel[]>([]);
   
   const getParcelChildren = (parent: Parcel, all: Parcel[], pts: Point[]) => {
@@ -132,6 +133,11 @@ export default function App() {
 
   // Clean up parcels that are no longer valid cycles
   useEffect(() => {
+    if (skipAutoDiscovery.current) {
+      skipAutoDiscovery.current = false;
+      return;
+    }
+
     if (points.length === 0 || connections.length === 0) {
       if (parcels.length > 0) setParcels([]);
       return;
@@ -980,6 +986,9 @@ export default function App() {
   };
 
   const handleConvertShare = (newPoints: Point[], newParcel: Parcel) => {
+    // Set flag to skip heavy auto-discovery since we are manually adding a valid parcel
+    skipAutoDiscovery.current = true;
+
     // Add new points without removing old ones to preserve Gen 1
     setPoints(prev => [...prev, ...newPoints]);
     

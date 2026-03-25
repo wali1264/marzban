@@ -31,11 +31,15 @@ export function findCycles(points: Point[], connections: Connection[]): Point[][
 
   const cycles: string[][] = [];
   const pointIds = Array.from(adj.keys());
+  const startTime = Date.now();
 
   const findFromNode = (startNode: string) => {
     const stack: { u: string; p: string; path: string[] }[] = [{ u: startNode, p: '', path: [] }];
     
     while (stack.length > 0) {
+      // Prevent UI freeze on extremely complex graphs
+      if (Date.now() - startTime > 100) return;
+
       const { u, p, path } = stack.pop()!;
       
       if (path.includes(u)) {
