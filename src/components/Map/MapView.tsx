@@ -301,22 +301,34 @@ export default function MapView({
       let gen = existingParcel?.generation;
       
       if (!gen) {
-        // Count how many other polygons contain this one
-        let containers = 0;
         const itemCentroid = turf.centroid(item.poly);
         
-        for (const other of polys) {
-          if (item === other) continue;
+        // Check if this cycle is inside an existing parcel to determine its generation
+        const parentParcel = parcels.find(p => {
+          const pPoints = p.pointIds.map(id => points.find(pt => pt.id === id)).filter(Boolean);
+          if (pPoints.length < 3) return false;
+          const pCoords = [...pPoints.map(pt => [pt!.lng, pt!.lat]), [pPoints[0]!.lng, pPoints[0]!.lat]];
+          const pPoly = turf.polygon([pCoords as any]);
           try {
-            // Use centroid check for more robust land division generation detection
-            if (turf.booleanPointInPolygon(itemCentroid, other.poly)) {
-              containers++;
-            }
-          } catch (e) {
-            // Fallback
+            return turf.booleanPointInPolygon(itemCentroid, pPoly);
+          } catch (e) { return false; }
+        });
+
+        if (parentParcel) {
+          gen = parentParcel.generation + 1;
+        } else {
+          // Fallback to counting containers in current cycles
+          let containers = 0;
+          for (const other of polys) {
+            if (item === other) continue;
+            try {
+              if (turf.booleanPointInPolygon(itemCentroid, other.poly)) {
+                containers++;
+              }
+            } catch (e) {}
           }
+          gen = containers + 1;
         }
-        gen = containers + 1;
       }
       
       // Check if this cycle has children (other cycles contained within it)
