@@ -276,7 +276,8 @@ export default function MapView({
       }
     });
 
-    return polys.map(item => {
+    // Step 1: Calculate generations for all cycles first
+    const cyclesWithInitialGen = polys.map(item => {
       const parcelId = item.cycle.map(p => p.id).sort().join(',');
       const existingParcel = parcelMap.get(parcelId);
       
@@ -300,19 +301,36 @@ export default function MapView({
         }
         gen = containers + 1;
       }
-      
+      return { ...item, gen };
+    });
+
+    // Step 2: Calculate hasChildren based on containment AND generation
+    return cyclesWithInitialGen.map(item => {
       // Check if this cycle has children (other cycles contained within it)
-      const hasChildren = polys.some(other => {
+      const hasChildren = cyclesWithInitialGen.some(other => {
         if (item === other) return false;
         try {
           const otherCentroid = turf.centroid(other.poly);
-          return turf.booleanPointInPolygon(otherCentroid, item.poly);
+          const isContained = turf.booleanPointInPolygon(otherCentroid, item.poly);
+          
+          if (!isContained) return false;
+
+          // If identical geometry (same centroid), only 'item' has children if 'other' is a later generation
+          const itemCentroid = turf.centroid(item.poly);
+          const dist = turf.distance(itemCentroid, otherCentroid);
+          
+          if (dist < 0.0001) { // Effectively identical
+            return other.gen > item.gen;
+          }
+
+          // Otherwise, if strictly contained, it's a child
+          return true;
         } catch (e) {
           return false;
         }
       });
       
-      return { ...item, gen, hasChildren, layerId: `layer-gen-${gen}` };
+      return { ...item, gen: item.gen, hasChildren, layerId: `layer-gen-${item.gen}` };
     });
   }, [cycles, connections, parcelMap]);
 
@@ -528,7 +546,7 @@ export default function MapView({
               </Tooltip>
             )}
           </Marker>
-          {parcel?.divisions.map(div => {
+          {(!parcel?.isConverted && parcel?.divisions) && parcel.divisions.map(div => {
             const center = getMultiCentroid(div.geometry);
             
             return (
