@@ -278,25 +278,7 @@ export default function MapView({
 
     return polys.map(item => {
       const parcelId = item.cycle.map(p => p.id).sort().join(',');
-      let existingParcel = parcelMap.get(parcelId);
-      
-      // Fallback to geometric matching if ID matching fails (e.g. boundary split)
-      if (!existingParcel) {
-        const coords = [...item.cycle.map(p => [p.lng, p.lat]), [item.cycle[0].lng, item.cycle[0].lat]];
-        const itemPoly = turf.polygon([coords as any]);
-        const itemArea = turf.area(itemPoly);
-        
-        existingParcel = parcels.find(p => {
-          if (Math.abs(p.area - itemArea) > 1) return false; // Area mismatch
-          const pPoints = p.pointIds.map(id => points.find(pt => pt.id === id)).filter(Boolean);
-          if (pPoints.length < 3) return false;
-          const pCoords = [...pPoints.map(pt => [pt!.lng, pt!.lat]), [pPoints[0]!.lng, pPoints[0]!.lat]];
-          const pPoly = turf.polygon([pCoords as any]);
-          try {
-            return turf.booleanEqual(itemPoly, pPoly);
-          } catch (e) { return false; }
-        });
-      }
+      const existingParcel = parcelMap.get(parcelId);
       
       let gen = existingParcel?.generation;
       
@@ -446,8 +428,8 @@ export default function MapView({
       // Strict generation filtering
       if (generationFilter !== 0 && gen !== generationFilter) return null;
 
-      // In "All" mode, hide if it has children (Unified Reality) OR if it's a converted parent
-      if (generationFilter === 0 && (hasChildren || parcel?.isConverted)) return null;
+      // In "All" mode, hide if it has children (Unified Reality) to show only the latest generation
+      if (generationFilter === 0 && hasChildren) return null;
 
       const area = calculatePolygonArea(cycle);
       
@@ -546,7 +528,7 @@ export default function MapView({
               </Tooltip>
             )}
           </Marker>
-          {!parcel?.isConverted && parcel?.divisions.map(div => {
+          {parcel?.divisions.map(div => {
             const center = getMultiCentroid(div.geometry);
             
             return (
