@@ -360,16 +360,17 @@ export default function MapView({
         }
       });
       
-      return { ...item, gen, hasChildren, parcel: existingParcel, layerId: `layer-gen-${gen}` };
+      const isParcel = !!existingParcel;
+      return { ...item, gen, hasChildren, parcel: existingParcel, isParcel, layerId: `layer-gen-${gen}` };
     });
   }, [cycles, parcels, points, parcelMap]);
 
   const filteredPoints = useMemo(() => {
+    const pointsInCycles = new Set<string>();
+    cyclesWithGen.forEach(item => item.cycle.forEach(p => pointsInCycles.add(p.id)));
+
     if (generationFilter === 0) {
       // In "All" mode, show points that belong to active cycles (no children) OR are not in any cycle
-      const pointsInCycles = new Set<string>();
-      cyclesWithGen.forEach(item => item.cycle.forEach(p => pointsInCycles.add(p.id)));
-      
       const activePointIds = new Set<string>();
       cyclesWithGen.forEach(item => {
         if (!item.hasChildren) {
@@ -381,9 +382,11 @@ export default function MapView({
     }
     
     // Generation filter: show points belonging to that generation's cycles
+    // OR cycles that are shares/divisions of that generation (gen + 1 but not yet parcels)
     const genPointIds = new Set<string>();
     cyclesWithGen.forEach(item => {
-      if (item.gen === generationFilter) {
+      const isVisible = item.gen === generationFilter || (item.gen === generationFilter + 1 && !item.isParcel);
+      if (isVisible) {
         item.cycle.forEach(p => genPointIds.add(p.id));
       }
     });
@@ -411,9 +414,11 @@ export default function MapView({
     }
     
     // Generation filter: show connections belonging to that generation's cycles
+    // OR cycles that are shares/divisions of that generation
     const genConnIds = new Set<string>();
     cyclesWithGen.forEach(item => {
-      if (item.gen === generationFilter) {
+      const isVisible = item.gen === generationFilter || (item.gen === generationFilter + 1 && !item.isParcel);
+      if (isVisible) {
         item.connectionIds.forEach(id => genConnIds.add(id));
       }
     });
@@ -427,7 +432,9 @@ export default function MapView({
   const visibleConnectionIds = useMemo(() => {
     const ids = new Set<string>();
     cyclesWithGen.forEach(item => {
-      const isVisible = generationFilter === 0 ? !item.hasChildren : item.gen === generationFilter;
+      const isVisible = generationFilter === 0 
+        ? !item.hasChildren 
+        : (item.gen === generationFilter || (item.gen === generationFilter + 1 && !item.isParcel));
       if (isVisible) {
         item.connectionIds.forEach(id => ids.add(id));
       }
@@ -502,7 +509,7 @@ export default function MapView({
       // Visibility logic for the parcel itself
       const isVisibleInCurrentFilter = generationFilter === 0 
         ? !hasChildren // Unified view: show ONLY the top-most layer (leaf nodes)
-        : (gen === generationFilter); // Generation view: show everything in that generation
+        : (gen === generationFilter || (gen === generationFilter + 1 && !parcel)); // Generation view: show current gen + active shares
 
       if (!isVisibleInCurrentFilter) return null;
 
@@ -522,10 +529,11 @@ export default function MapView({
       const isRealParcel = !!parcel;
       const isTopLevel = gen === 1;
       const isDividing = mode === 'DIVIDE';
+      const isShareOfCurrentGen = generationFilter !== 0 && gen === generationFilter + 1 && !parcel;
       
       const showAreaCard = isVisible && shouldShowDetails && 
         (generationFilter !== 0 || !hasChildren) && 
-        (isRealParcel || isTopLevel || isDividing || (generationFilter === 0 && !hasChildren));
+        (isRealParcel || isTopLevel || isDividing || (generationFilter === 0 && !hasChildren) || isShareOfCurrentGen);
       
       // Calculate centroid for precise positioning
       const centroid = turf.centroid(poly);
