@@ -321,14 +321,15 @@ export default function MapView({
         // Check if this cycle is inside an existing parcel to determine its generation
         // We look for the "deepest" parent (highest generation)
         const parentParcels = parcels.filter(p => {
-          // A parcel cannot be its own parent
-          if (parcelId === p.pointIds.sort().join(',')) return false;
-          
           const pPoints = p.pointIds.map(id => points.find(pt => pt.id === id)).filter(Boolean);
           if (pPoints.length < 3) return false;
           const pCoords = [...pPoints.map(pt => [pt!.lng, pt!.lat]), [pPoints[0]!.lng, pPoints[0]!.lat]];
           const pPoly = turf.polygon([pCoords as any]);
           try {
+            // A parcel cannot be its own parent (geometric check)
+            if (turf.booleanEqual(itemPoly, pPoly)) return false;
+            
+            // Check if the cycle is inside this parcel
             return turf.booleanPointInPolygon(itemCentroid, pPoly);
           } catch (e) { return false; }
         });
@@ -494,9 +495,16 @@ export default function MapView({
       const shouldShowDetails = !highlightedParcelId || highlightedParcelId === parcel?.id;
       
       // Area Card Visibility Logic:
-      // 1. In specific generation filters (Time Machine), ALWAYS show the card for that generation's parcels.
-      // 2. In "All" mode (Unified Reality), only show the card for leaf nodes (already handled by isVisibleInCurrentFilter).
-      const showAreaCard = isVisible && shouldShowDetails && (generationFilter !== 0 || !hasChildren);
+      // 1. In specific generation filters (Time Machine), show the card if it's a real parcel or if we are in DIVIDE mode.
+      // 2. In "All" mode (Unified Reality), only show the card for leaf nodes.
+      // 3. Hide cards for "leftover" cycles in higher generations unless in DIVIDE mode.
+      const isRealParcel = !!parcel;
+      const isTopLevel = gen === 1;
+      const isDividing = mode === 'DIVIDE';
+      
+      const showAreaCard = isVisible && shouldShowDetails && 
+        (generationFilter !== 0 || !hasChildren) && 
+        (isRealParcel || isTopLevel || isDividing);
       
       // Calculate centroid for precise positioning
       const centroid = turf.centroid(poly);
