@@ -592,8 +592,8 @@ export default function MapView({
           const area = calculatePolygonArea(cycle);
 
           // Visibility logic for details based on zoom
-          const isVisible = zoom > 15;
-          const scale = Math.max(0.5, Math.min(1, (zoom - 14) / 4));
+          const isVisible = zoom > 16.5; // Increased threshold for less clutter
+          const scale = Math.max(0.6, Math.min(1, (zoom - 16) / 4));
 
           // If a parcel is highlighted, only show its details
           const shouldShowDetails = !highlightedParcelId || highlightedParcelId === parcel?.id;
@@ -602,10 +602,12 @@ export default function MapView({
           // 1. In "All" mode (Unified Reality), only show the card for leaf nodes (most refined state).
           // 2. In specific generation filters (Time Machine), show the card for parcels of THAT generation.
           // 3. Show cards for active shares (next gen) ONLY when in DIVIDE mode to avoid clutter.
-          const isRealParcel = !!parcel;
+          // 4. Don't show labels for extremely small slivers unless highlighted.
+          const isHighlighted = highlightedParcelId === parcel?.id;
           const isDividing = mode === 'DIVIDE';
+          const isLargeEnough = area > 5 || isHighlighted;
           
-          const showAreaCard = isVisible && shouldShowDetails && 
+          const showAreaCard = isVisible && shouldShowDetails && isLargeEnough &&
             (
               (generationFilter === 0 && !hasChildren) || // All mode: only leaf nodes
               (generationFilter > 0 && gen === generationFilter) || // Time Machine: current gen parcels
@@ -615,14 +617,6 @@ export default function MapView({
           // Calculate centroid for precise positioning
           const centroid = turf.centroid(poly);
           const [centerLng, centerLat] = centroid.geometry.coordinates;
-
-          // Zoom-based scaling for owner name
-          const baseFontSize = Math.max(16, Math.sqrt(area) / 3);
-          const zoomScale = Math.pow(1.15, zoom - 18);
-          const finalFontSize = baseFontSize * zoomScale;
-          const ownerOpacity = Math.min(0.25, Math.max(0, (zoom - 15) * 0.08));
-
-          const isHighlighted = highlightedParcelId === parcel?.id;
 
           return (
             <React.Fragment key={`cycle-group-${idx}`}>
@@ -645,7 +639,7 @@ export default function MapView({
                 }}
               />
 
-              {/* Centered Marker for Tooltips (Area Card & Owner Name) */}
+              {/* Centered Marker for Area Card */}
               <Marker 
                 position={[centerLat, centerLng]} 
                 icon={transparentIcon}
@@ -653,49 +647,31 @@ export default function MapView({
               >
                 {showAreaCard && (
                   <Tooltip permanent direction="center" className="area-tooltip">
-                    <div className="relative flex items-center justify-center">
-                      {/* Owner Name Watermark */}
-                      {(parcel?.ownerName || parcel?.name) && (
-                        <div 
-                          className="absolute font-black whitespace-nowrap pointer-events-none select-none transition-all duration-500 text-slate-900"
-                          style={{ 
-                            fontSize: `${finalFontSize}px`,
-                            opacity: ownerOpacity,
-                            transform: `rotate(-15deg)`,
-                            zIndex: 0
-                          }}
-                        >
-                          {parcel?.ownerName || parcel?.name}
+                    <div 
+                      className="relative z-10 flex flex-col items-center bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200 shadow-lg transition-all duration-300 pointer-events-none min-w-[80px]" 
+                      dir="rtl"
+                      style={{ transform: `scale(${scale})`, opacity: isVisible ? 1 : 0 }}
+                    >
+                      <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">مساحت</span>
+                      <div className="flex items-baseline gap-1">
+                        <span className="text-base font-mono font-black text-slate-800">
+                          {(() => {
+                            const integerPart = Math.floor(area);
+                            const decimalPart = Math.round((area - integerPart) * 100);
+                            if (decimalPart === 0) return integerPart.toLocaleString('fa-IR');
+                            return `${integerPart.toLocaleString('fa-IR')}/${decimalPart.toLocaleString('fa-IR')}`;
+                          })()}
+                        </span>
+                        <span className="text-[9px] text-slate-500 font-bold">م²</span>
+                      </div>
+                      {parcel && (
+                        <div className="flex items-center gap-1.5 border-t border-slate-100 mt-1 pt-1 w-full justify-center">
+                          <span className="text-[8px] text-slate-400 font-medium">نسل {gen}</span>
+                          {parcel.isConverted && (
+                            <span className="text-[8px] text-amber-500 font-bold">تفكیک شده</span>
+                          )}
                         </div>
                       )}
-                      
-                      {/* Area Card */}
-                      <div 
-                        className="relative z-10 flex flex-col items-center bg-white/90 backdrop-blur-sm px-2 py-1 rounded-lg border border-slate-200 shadow-sm transition-all duration-300 pointer-events-none" 
-                        dir="rtl"
-                        style={{ transform: `scale(${scale})`, opacity: isVisible ? 1 : 0 }}
-                      >
-                        <span className="text-[10px] text-slate-500 font-bold">مساحت قطعه</span>
-                        <div className="flex items-baseline gap-0.5">
-                          <span className="text-sm font-mono font-bold text-slate-700">
-                            {(() => {
-                              const integerPart = Math.floor(area);
-                              const decimalPart = Math.round((area - integerPart) * 100);
-                              if (decimalPart === 0) return integerPart.toLocaleString('fa-IR');
-                              return `${integerPart.toLocaleString('fa-IR')}/${decimalPart.toLocaleString('fa-IR')}`;
-                            })()}
-                          </span>
-                          <span className="text-[8px] text-slate-600 font-bold">متر مربع</span>
-                        </div>
-                        {parcel && (
-                          <div className="flex items-center gap-1 border-t border-slate-50 mt-0.5 w-full justify-center">
-                            <span className="text-[7px] text-slate-400 font-medium">نسل {gen}</span>
-                            {parcel.isConverted && (
-                              <span className="text-[7px] text-amber-500 font-bold">تفكیک شده</span>
-                            )}
-                          </div>
-                        )}
-                      </div>
                     </div>
                   </Tooltip>
                 )}
