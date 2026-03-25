@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Box, X, CheckCircle2, AlertCircle, Zap, MapPin } from 'lucide-react';
-import { Point, Parcel, Division } from '../../types';
+import { Point, Parcel, Division, Connection } from '../../types';
 import * as turf from '@turf/turf';
 
 interface ConvertModalProps {
@@ -10,10 +10,11 @@ interface ConvertModalProps {
   parcel: Parcel;
   division?: Division | null;
   points: Point[];
-  onConvert: (newPoints: Point[], newParcels: Parcel[]) => void;
+  connections: Connection[];
+  onConvert: (newPoints: Point[], newParcels: Parcel[], newConnections: Connection[]) => void;
 }
 
-export default function ConvertModal({ isOpen, onClose, parcel, division, points, onConvert }: ConvertModalProps) {
+export default function ConvertModal({ isOpen, onClose, parcel, division, points, connections, onConvert }: ConvertModalProps) {
   const [isProcessing, setIsProcessing] = React.useState(false);
 
   const totalPercentage = React.useMemo(() => {
@@ -30,6 +31,9 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
     
     const allNewPoints: Point[] = [];
     const allNewParcels: Parcel[] = [];
+    const allNewConnections: Connection[] = [];
+    
+    const nextGeneration = (parcel.generation || 1) + 1;
     
     // Determine which divisions to convert
     const divisionsToConvert = division ? [division] : parcel.divisions;
@@ -38,6 +42,8 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
       const newPointIds: string[] = [];
       
       div.geometry.forEach((part) => {
+        const partPointIds: string[] = [];
+        
         part.forEach((coord, index) => {
           // Skip the last point if it's the same as the first (closed loop)
           if (index === part.length - 1 && 
@@ -46,34 +52,19 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
             return;
           }
 
-          // Check if any of these coordinates already match existing points
-          // within a very small threshold (e.g., 1cm)
-          const existingPoint = points.find(p => {
-            const distance = turf.distance(
-              turf.point([p.lng, p.lat]),
-              turf.point([coord[1], coord[0]]), // Turf uses [lng, lat]
-              { units: 'meters' }
-            );
-            return distance < 0.01; // 1cm threshold
-          });
-
-          // Also check points we just created for previous divisions in this same batch
-          const justCreatedPoint = allNewPoints.find(p => {
+          // Check if we already created a point for this coordinate in this batch
+          const existingNewPoint = allNewPoints.find(p => {
             const distance = turf.distance(
               turf.point([p.lng, p.lat]),
               turf.point([coord[1], coord[0]]),
               { units: 'meters' }
             );
-            return distance < 0.01;
+            return distance < 0.01; // 1cm threshold
           });
 
-          if (existingPoint) {
-            if (!newPointIds.includes(existingPoint.id)) {
-              newPointIds.push(existingPoint.id);
-            }
-          } else if (justCreatedPoint) {
-            if (!newPointIds.includes(justCreatedPoint.id)) {
-              newPointIds.push(justCreatedPoint.id);
+          if (existingNewPoint) {
+            if (!partPointIds.includes(existingNewPoint.id)) {
+              partPointIds.push(existingNewPoint.id);
             }
           } else {
             const newId = generateId();
@@ -82,10 +73,39 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
               lng: coord[1],
               lat: coord[0],
               timestamp: Date.now(),
-              accuracy: 0.1 // High precision generated point
+              accuracy: 0.1, // High precision generated point
+              generation: nextGeneration
             };
             allNewPoints.push(newPoint);
-            newPointIds.push(newId);
+            partPointIds.push(newId);
+          }
+        });
+
+        // Add connections for this part
+        for (let i = 0; i < partPointIds.length; i++) {
+          const fromId = partPointIds[i];
+          const toId = partPointIds[(i + 1) % partPointIds.length];
+          
+          // Check if connection already exists in this batch
+          const connExists = allNewConnections.some(c => 
+            (c.fromId === fromId && c.toId === toId) || 
+            (c.fromId === toId && c.toId === fromId)
+          );
+
+          if (!connExists) {
+            allNewConnections.push({
+              id: generateId(),
+              fromId,
+              toId,
+              generation: nextGeneration
+            });
+          }
+        }
+
+        // Collect all point IDs for the parcel
+        partPointIds.forEach(id => {
+          if (!newPointIds.includes(id)) {
+            newPointIds.push(id);
           }
         });
       });
@@ -100,14 +120,15 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
         divisions: [],
         area: totalArea,
         ownerName: div.partnerId || parcel.ownerName, // Use partner name if available
-        generation: (parcel.generation || 1) + 1,
+        generation: nextGeneration,
+        parentId: parcel.id,
         createdAt: Date.now()
       };
       
       allNewParcels.push(newParcel);
     });
 
-    onConvert(allNewPoints, allNewParcels);
+    onConvert(allNewPoints, allNewParcels, allNewConnections);
     setIsProcessing(false);
     onClose();
   };

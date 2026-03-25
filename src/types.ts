@@ -11,6 +11,7 @@ export interface Point {
   accuracy: number; // in meters
   name?: string;
   description?: string;
+  generation?: number; // 1 for root, 2 for nested, etc.
   // GNSS Metadata for Audit
   satellites?: number;
   confidence?: number;
@@ -22,6 +23,7 @@ export interface Connection {
   id: string;
   fromId: string;
   toId: string;
+  generation?: number; // 1 for root, 2 for nested, etc.
 }
 
 export interface Partner {

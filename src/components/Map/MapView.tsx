@@ -316,10 +316,47 @@ export default function MapView({
     });
   }, [cycles, connections, parcelMap]);
 
+  const filteredPoints = useMemo(() => {
+    if (generationFilter === 0) {
+      // In "All" mode, show points that belong to active cycles (no children) OR are not in any cycle
+      const pointsInCycles = new Set<string>();
+      cyclesWithGen.forEach(item => item.cycle.forEach(p => pointsInCycles.add(p.id)));
+      
+      const activePointIds = new Set<string>();
+      cyclesWithGen.forEach(item => {
+        if (!item.hasChildren) {
+          item.cycle.forEach(p => activePointIds.add(p.id));
+        }
+      });
+      
+      return points.filter(p => activePointIds.has(p.id) || !pointsInCycles.has(p.id));
+    }
+    return points.filter(p => (p.generation || 1) === generationFilter);
+  }, [points, generationFilter, cyclesWithGen]);
+
+  const filteredConnections = useMemo(() => {
+    if (generationFilter === 0) {
+      // In "All" mode, show connections that belong to active cycles OR are not in any cycle
+      const connsInCycles = new Set<string>();
+      cyclesWithGen.forEach(item => item.connectionIds.forEach(id => connsInCycles.add(id)));
+      
+      const activeConnIds = new Set<string>();
+      cyclesWithGen.forEach(item => {
+        if (!item.hasChildren) {
+          item.connectionIds.forEach(id => activeConnIds.add(id));
+        }
+      });
+      
+      return connections.filter(c => activeConnIds.has(c.id) || !connsInCycles.has(c.id));
+    }
+    return connections.filter(c => (c.generation || 1) === generationFilter);
+  }, [connections, generationFilter, cyclesWithGen]);
+
   const visibleConnectionIds = useMemo(() => {
     const ids = new Set<string>();
     cyclesWithGen.forEach(item => {
-      if (generationFilter === 0 || item.gen === generationFilter) {
+      const isVisible = generationFilter === 0 ? !item.hasChildren : item.gen === generationFilter;
+      if (isVisible) {
         item.connectionIds.forEach(id => ids.add(id));
       }
     });
@@ -342,12 +379,12 @@ export default function MapView({
   };
 
   const renderConnections = () => {
-    return connections.map(conn => {
+    return filteredConnections.map(conn => {
       // Filter connections based on generation
       if (!visibleConnectionIds.has(conn.id) && mode !== 'CONNECT') return null;
 
-      const from = points.find(p => p.id === conn.fromId);
-      const to = points.find(p => p.id === conn.toId);
+      const from = filteredPoints.find(p => p.id === conn.fromId);
+      const to = filteredPoints.find(p => p.id === conn.toId);
       if (from && to) {
         return (
           <Polyline 
@@ -390,6 +427,9 @@ export default function MapView({
       
       // Strict generation filtering
       if (generationFilter !== 0 && gen !== generationFilter) return null;
+
+      // In "All" mode, hide if it has children (Unified Reality) to show only the latest generation
+      if (generationFilter === 0 && hasChildren) return null;
 
       const area = calculatePolygonArea(cycle);
       
@@ -545,7 +585,7 @@ export default function MapView({
     if (!parcel) return null;
 
     const parcelPoints = parcel.pointIds
-      .map(id => points.find(p => p.id === id))
+      .map(id => filteredPoints.find(p => p.id === id))
       .filter((p): p is Point => !!p);
 
     if (parcelPoints.length < 3) return null;
@@ -599,7 +639,7 @@ export default function MapView({
           />
         )}
 
-        {points.map(point => {
+        {filteredPoints.map(point => {
           const isSelected = selectedPointId === point.id;
           return (
             <Marker 

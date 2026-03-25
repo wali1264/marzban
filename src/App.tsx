@@ -167,6 +167,10 @@ export default function App() {
         const pPoly = turf.polygon([pCoords as any]);
         
         const geometricMatch = currentCycles.find(cycle => {
+          // Only match within the same generation to preserve layer integrity
+          const cycleGen = cycle[0]?.generation || 1;
+          if (cycleGen !== (p.generation || 1)) return false;
+
           const cCoords = [...cycle.map(pt => [pt.lng, pt.lat]), [cycle[0].lng, cycle[0].lat]];
           const cPoly = turf.polygon([cCoords as any]);
           try {
@@ -588,7 +592,8 @@ export default function App() {
       const newPoint: Point = {
         id: Math.random().toString(36).substr(2, 9),
         ...data,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        generation: generationFilter || 1
       };
       setPoints(prev => [...prev, newPoint]);
       setSelectedPointId(newPoint.id);
@@ -629,7 +634,8 @@ export default function App() {
           const newConn: Connection = {
             id: Math.random().toString(36).substr(2, 9),
             fromId: selectedPointId,
-            toId: point.id
+            toId: point.id,
+            generation: generationFilter || 1
           };
           setConnections(prev => [...prev, newConn]);
         }
@@ -1031,63 +1037,13 @@ export default function App() {
     setParcels(data.parcels);
   };
 
-  const handleConvertShare = (newPoints: Point[], newParcels: Parcel[]) => {
+  const handleConvertShare = (newPoints: Point[], newParcels: Parcel[], newConns: Connection[]) => {
     // Set flag to skip heavy auto-discovery since we are manually adding valid parcels
     skipAutoDiscovery.current = true;
 
-    // Add new points without removing old ones to preserve Gen 1
+    // Add new points, parcels, and connections without removing old ones to preserve history
     setPoints(prev => [...prev, ...newPoints]);
-    
-    // Create new connections for the new parcels specifically
-    const newConns: Connection[] = [];
-    newParcels.forEach(p => {
-      for (let i = 0; i < p.pointIds.length; i++) {
-        const fromId = p.pointIds[i];
-        const toId = p.pointIds[(i + 1) % p.pointIds.length];
-        
-        newConns.push({
-          id: generateId(),
-          fromId,
-          toId
-        });
-      }
-    });
-
-    // Topological Integrity: Split existing connections if new points lie on them
-    // This ensures neighbors who shared the boundary now use the split segments
-    const splitConns: Connection[] = [];
-    const removedConnIds = new Set<string>();
-
-    newPoints.forEach(newPt => {
-      connections.forEach(conn => {
-        if (removedConnIds.has(conn.id)) return;
-
-        const from = points.find(p => p.id === conn.fromId);
-        const to = points.find(p => p.id === conn.toId);
-        if (from && to) {
-          const line = turf.lineString([[from.lng, from.lat], [to.lng, to.lat]]);
-          const pt = turf.point([newPt.lng, newPt.lat]);
-          const distance = turf.pointToLineDistance(pt, line, { units: 'meters' });
-          
-          if (distance < 0.01) { // 1cm threshold
-            const distToFrom = turf.distance(pt, turf.point([from.lng, from.lat]), { units: 'meters' });
-            const distToTo = turf.distance(pt, turf.point([to.lng, to.lat]), { units: 'meters' });
-            
-            if (distToFrom > 0.01 && distToTo > 0.01) {
-              removedConnIds.add(conn.id);
-              splitConns.push({ id: generateId(), fromId: conn.fromId, toId: newPt.id });
-              splitConns.push({ id: generateId(), fromId: newPt.id, toId: conn.toId });
-            }
-          }
-        }
-      });
-    });
-    
-    setConnections(prev => [
-      ...prev.filter(c => !removedConnIds.has(c.id)), 
-      ...newConns,
-      ...splitConns
-    ]);
+    setConnections(prev => [...prev, ...newConns]);
     
     // Add the new parcels to the list as independent entities
     // AND mark the original parcel as converted to preserve Gen 1 history
@@ -1102,15 +1058,7 @@ export default function App() {
         return p;
       });
 
-      const parcelsWithTimestamp = newParcels.map(p => ({
-        ...p,
-        id: generateId(),
-        parentId: selectedParcelForConversion?.id,
-        generation: (selectedParcelForConversion?.generation || 1) + 1,
-        createdAt: Date.now()
-      }));
-      
-      return [...updatedParcels, ...parcelsWithTimestamp];
+      return [...updatedParcels, ...newParcels];
     });
     
     setShowConvertModal(false);
@@ -2259,6 +2207,7 @@ export default function App() {
           parcel={selectedParcelForConversion}
           division={selectedDivisionForConversion}
           points={points}
+          connections={connections}
           onConvert={handleConvertShare}
         />
       )}
