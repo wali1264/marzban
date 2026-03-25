@@ -442,6 +442,8 @@ export default function MapView({
   const renderPolygons = () => {
     return cyclesWithGen.map((item, idx) => {
       const { cycle, gen, poly, hasChildren } = item;
+      const parcelId = cycle.map(p => p.id).sort().join(',');
+      const parcel = parcelMap.get(parcelId);
       
       // Strict generation filtering
       if (generationFilter !== 0 && gen !== generationFilter) return null;
@@ -450,9 +452,6 @@ export default function MapView({
       if (generationFilter === 0 && (hasChildren || parcel?.isConverted)) return null;
 
       const area = calculatePolygonArea(cycle);
-      
-      const parcelId = cycle.map(p => p.id).sort().join(',');
-      const parcel = parcelMap.get(parcelId);
 
       // Visibility logic based on zoom
       const isVisible = zoom > 15;
