@@ -20,7 +20,7 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
     return parcel.divisions.reduce((sum, d) => sum + d.percentage, 0);
   }, [parcel.divisions]);
 
-  const isComplete = Math.abs(totalPercentage - 100) < 0.01;
+  const isComplete = parcel.isAngleSet || Math.abs(totalPercentage - 100) < 0.01;
 
   const handleConvert = () => {
     if (!isComplete) return;
@@ -144,7 +144,7 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
                   </p>
                   {!isComplete && (
                     <p className="text-[10px] text-red-600 font-bold">
-                      هشدار: مجموع سهام باید ۱۰۰٪ باشد (فعلاً {totalPercentage}٪). ابتدا تمام سهام را تعریف کنید.
+                      هشدار: مجموع سهام باید ۱۰۰٪ باشد. ابتدا تمام سهام را تعریف کنید.
                     </p>
                   )}
                 </div>

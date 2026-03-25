@@ -148,26 +148,64 @@ export default function App() {
     const cycleIds = new Set(cycleIdsToPoints.keys());
     
     setParcels(prev => {
-      // 1. Keep existing parcels that are still valid
-      const stillValid = prev.filter(p => cycleIds.has(p.pointIds.sort().join(',')));
+      const matchedCycleIds = new Set<string>();
       
-      // 2. Identify new cycles
-      const existingCycleIds = new Set(prev.map(p => p.pointIds.sort().join(',')));
-      const newCycleIds = Array.from(cycleIds).filter(id => !existingCycleIds.has(id));
+      // 1. Match existing parcels with new cycles geometrically
+      // This prevents "Neighbor Reset" when a point is added on a shared boundary
+      const updatedParcels = prev.map(p => {
+        // Find if this parcel's points still form a valid cycle
+        const currentId = p.pointIds.sort().join(',');
+        if (cycleIds.has(currentId)) {
+          matchedCycleIds.add(currentId);
+          return p;
+        }
+
+        // If not, check if there's a geometrically identical cycle (e.g. boundary was split)
+        const pCycle = p.pointIds.map(pid => points.find(pt => pt.id === pid)!).filter(Boolean);
+        if (pCycle.length < 3) return p;
+        const pCoords = [...pCycle.map(pt => [pt.lng, pt.lat]), [pCycle[0].lng, pCycle[0].lat]];
+        const pPoly = turf.polygon([pCoords as any]);
+        
+        const geometricMatch = currentCycles.find(cycle => {
+          const cCoords = [...cycle.map(pt => [pt.lng, pt.lat]), [cycle[0].lng, cycle[0].lat]];
+          const cPoly = turf.polygon([cCoords as any]);
+          try {
+            // Use booleanEqual for topological identity even if point IDs differ
+            return turf.booleanEqual(pPoly, cPoly);
+          } catch (e) { return false; }
+        });
+
+        if (geometricMatch) {
+          const matchId = geometricMatch.map(pt => pt.id).sort().join(',');
+          matchedCycleIds.add(matchId);
+          return {
+            ...p,
+            pointIds: geometricMatch.map(pt => pt.id),
+            area: calculatePolygonArea(geometricMatch)
+          };
+        }
+        return p;
+      });
+
+      // 2. Keep only those that were matched or are still valid
+      const stillValid = updatedParcels.filter(p => matchedCycleIds.has(p.pointIds.sort().join(',')));
+      
+      // 3. Identify brand new cycles
+      const newCycleIds = Array.from(cycleIds).filter(id => !matchedCycleIds.has(id));
       
       if (newCycleIds.length === 0) {
         if (stillValid.length !== prev.length) return stillValid;
         return prev;
       }
 
-      // 3. Process new cycles
+      // 4. Process new cycles
       const newParcels: Parcel[] = [];
       newCycleIds.forEach(id => {
         const cyclePoints = cycleIdsToPoints.get(id)!;
         const coords = [...cyclePoints.map(p => [p.lng, p.lat]), [cyclePoints[0].lng, cyclePoints[0].lat]];
         const newPoly = turf.polygon([coords as any]);
         
-        // Check if it's merged from old ones
+        // Check if it's merged from old ones or a child of an existing one
         const mergedFrom = prev.filter(old => {
           const oldCycle = old.pointIds.map(pid => points.find(p => p.id === pid)!).filter(Boolean);
           if (oldCycle.length < 3) return false;
@@ -1004,8 +1042,42 @@ export default function App() {
         toId
       });
     }
+
+    // Topological Integrity: Split existing connections if new points lie on them
+    // This ensures neighbors who shared the boundary now use the split segments
+    const splitConns: Connection[] = [];
+    const removedConnIds = new Set<string>();
+
+    newPoints.forEach(newPt => {
+      connections.forEach(conn => {
+        if (removedConnIds.has(conn.id)) return;
+
+        const from = points.find(p => p.id === conn.fromId);
+        const to = points.find(p => p.id === conn.toId);
+        if (from && to) {
+          const line = turf.lineString([[from.lng, from.lat], [to.lng, to.lat]]);
+          const pt = turf.point([newPt.lng, newPt.lat]);
+          const distance = turf.pointToLineDistance(pt, line, { units: 'meters' });
+          
+          if (distance < 0.01) { // 1cm threshold
+            const distToFrom = turf.distance(pt, turf.point([from.lng, from.lat]), { units: 'meters' });
+            const distToTo = turf.distance(pt, turf.point([to.lng, to.lat]), { units: 'meters' });
+            
+            if (distToFrom > 0.01 && distToTo > 0.01) {
+              removedConnIds.add(conn.id);
+              splitConns.push({ id: generateId(), fromId: conn.fromId, toId: newPt.id });
+              splitConns.push({ id: generateId(), fromId: newPt.id, toId: conn.toId });
+            }
+          }
+        }
+      });
+    });
     
-    setConnections(prev => [...prev, ...newConns]);
+    setConnections(prev => [
+      ...prev.filter(c => !removedConnIds.has(c.id)), 
+      ...newConns,
+      ...splitConns
+    ]);
     
     // Add the new Gen 2 parcel to the list as an independent entity
     // AND remove the division from the original parcel in Gen 1
@@ -1761,7 +1833,14 @@ export default function App() {
                 {parcels.length > 0 ? (
                   <div className="space-y-4">
                     <h3 className="font-bold text-slate-800 text-sm">لیست قطعات و تقسیمات:</h3>
-                    {parcels.map((parcel, idx) => (
+                    {parcels
+                      .filter(p => {
+                        if (generationFilter !== 0) return p.generation === generationFilter;
+                        // In "All" mode, hide if it has children (Unified Reality)
+                        const children = getParcelChildren(p, parcels, points);
+                        return children.length === 0;
+                      })
+                      .map((parcel, idx) => (
                       <div key={parcel.id} className="border border-slate-100 rounded-2xl p-4 bg-white shadow-sm">
                         <div className="flex justify-between items-center mb-3">
                           <span className="font-bold text-slate-900">{parcel.name}</span>
