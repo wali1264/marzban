@@ -19,13 +19,9 @@ export function calculatePolygonArea(nodes: Point[]): number {
   }
 }
 
-// Find all simple cycles in the graph of connections using Planar Graph Face Traversal
+// Find all simple cycles in the graph of connections
 export function findCycles(points: Point[], connections: Connection[]): Point[][] {
-  if (points.length < 3 || connections.length < 3) return [];
-
-  const pointMap = new Map(points.map(p => [p.id, p]));
   const adj = new Map<string, string[]>();
-  
   connections.forEach(c => {
     if (!adj.has(c.fromId)) adj.set(c.fromId, []);
     if (!adj.has(c.toId)) adj.set(c.toId, []);
@@ -33,77 +29,39 @@ export function findCycles(points: Point[], connections: Connection[]): Point[][
     adj.get(c.toId)!.push(c.fromId);
   });
 
-  // Pre-sort neighbors by angle CCW to enable O(1) traversal decision at each junction
-  const sortedAdj = new Map<string, string[]>();
-  for (const [uId, neighbors] of adj.entries()) {
-    const u = pointMap.get(uId);
-    if (!u) continue;
+  const cycles: string[][] = [];
+  const pointIds = Array.from(adj.keys());
+
+  const findFromNode = (startNode: string) => {
+    const stack: { u: string; p: string; path: string[] }[] = [{ u: startNode, p: '', path: [] }];
     
-    const sorted = [...neighbors].sort((aId, bId) => {
-      const a = pointMap.get(aId)!;
-      const b = pointMap.get(bId)!;
-      // Use atan2 for CCW sorting of neighbors relative to the current node
-      return Math.atan2(a.lat - u.lat, a.lng - u.lng) - Math.atan2(b.lat - u.lat, b.lng - u.lng);
-    });
-    sortedAdj.set(uId, sorted);
-  }
-
-  const visitedEdges = new Set<string>();
-  const faces: string[][] = [];
-
-  // Planar Graph Face Traversal Algorithm (Linear Time Complexity O(E))
-  // This algorithm identifies all "faces" of the planar graph.
-  for (const [uId, neighbors] of sortedAdj.entries()) {
-    for (const vId of neighbors) {
-      const edgeKey = `${uId}->${vId}`;
-      if (visitedEdges.has(edgeKey)) continue;
-
-      const face: string[] = [];
-      let curr = uId;
-      let next = vId;
-
-      // Follow the "rightmost" edge at each junction to trace a face boundary
-      while (!visitedEdges.has(`${curr}->${next}`)) {
-        visitedEdges.add(`${curr}->${next}`);
-        face.push(curr);
-        
-        const prev = curr;
-        curr = next;
-        
-        const currNeighbors = sortedAdj.get(curr);
-        if (!currNeighbors) break;
-
-        const prevIndex = currNeighbors.indexOf(prev);
-        if (prevIndex === -1) break;
-
-        // The "rightmost" neighbor is the one immediately before the incoming edge in CCW list
-        const nextIndex = (prevIndex - 1 + currNeighbors.length) % currNeighbors.length;
-        next = currNeighbors[nextIndex];
-
-        // Safety break for non-planar or degenerate cases (though land parcels should be planar)
-        if (face.length > points.length + 2) break; 
+    while (stack.length > 0) {
+      const { u, p, path } = stack.pop()!;
+      
+      if (path.includes(u)) {
+        const cycle = path.slice(path.indexOf(u));
+        if (cycle.length >= 3) {
+          const sortedCycle = [...cycle].sort().join(',');
+          if (!cycles.some(c => [...c].sort().join(',') === sortedCycle)) {
+            cycles.push(cycle);
+          }
+        }
+        continue;
       }
 
-      // Only keep valid cycles that returned to start and have at least 3 points
-      if (face.length >= 3 && curr === uId) {
-        faces.push(face);
+      if (path.length > 200) continue; 
+
+      const neighbors = adj.get(u) || [];
+      for (const v of neighbors) {
+        if (v === p) continue;
+        stack.push({ u: v, p: u, path: [...path, u] });
       }
     }
-  }
+  };
 
-  // Filter for CCW cycles (inner faces). 
-  // In a planar traversal using the "rightmost" rule, inner faces are CCW (positive area),
-  // while the "outer face" (the infinite region) is CW (negative area).
-  const validCycles = faces.filter(faceIds => {
-    const facePoints = faceIds.map(id => pointMap.get(id)!);
-    let signedArea = 0;
-    for (let i = 0; i < facePoints.length; i++) {
-      const j = (i + 1) % facePoints.length;
-      signedArea += facePoints[i].lng * facePoints[j].lat;
-      signedArea -= facePoints[j].lng * facePoints[i].lat;
-    }
-    return signedArea > 0; 
-  });
+  pointIds.forEach(id => findFromNode(id));
 
-  return validCycles.map(faceIds => faceIds.map(id => pointMap.get(id)!));
+  return cycles.map(cycleIds => 
+    cycleIds.map(id => points.find(p => p.id === id)!).filter(Boolean)
+  );
 }

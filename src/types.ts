@@ -49,7 +49,6 @@ export interface Parcel {
   generation?: number; // 1 for root, 2 for nested, etc.
   parentId?: string; // ID of the parent parcel if this is a division
   createdAt: number;
-  isFullyAllocated?: boolean; // Whether the 100% allocation has been confirmed
 }
 
 export interface GNSSConfig {

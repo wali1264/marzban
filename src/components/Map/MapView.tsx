@@ -30,7 +30,6 @@ interface MapViewProps {
   onPolygonClick?: (points: Point[]) => void;
   onDivisionClick?: (parcelId: string, divisionId: string) => void;
   onDivisionLongPress?: (parcelId: string, divisionId: string) => void;
-  onFormParcel?: (points: Point[]) => void;
   userLocation?: { lat: number; lng: number; accuracy: number };
   showUserLocation: boolean;
   selectedPointId: string | null;
@@ -215,7 +214,6 @@ export default function MapView({
   onPolygonClick,
   onDivisionClick,
   onDivisionLongPress,
-  onFormParcel,
   userLocation,
   showUserLocation,
   selectedPointId,
@@ -230,11 +228,9 @@ export default function MapView({
   const cycles = useMemo(() => findCycles(points, connections), [points, connections]);
   const [zoom, setZoom] = useState(13);
 
-  const pointMap = useMemo(() => new Map(points.map(p => [p.id, p])), [points]);
-
   const trackingTarget = useMemo(() => 
-    trackingTargetId ? pointMap.get(trackingTargetId) : null
-  , [trackingTargetId, pointMap]);
+    trackingTargetId ? points.find(p => p.id === trackingTargetId) : null
+  , [trackingTargetId, points]);
 
   const trackingDistance = useMemo(() => {
     if (userLocation && trackingTarget) {
@@ -258,44 +254,17 @@ export default function MapView({
   }, [parcels]);
 
   const cyclesWithGen = useMemo(() => {
-    // 1. Start with all manually defined parcels
-    const parcelItems = parcels.map(p => {
-      const cycle = p.pointIds.map(id => pointMap.get(id)!).filter(Boolean);
-      if (cycle.length < 3) return null;
-      const coords = [...cycle.map(pt => [pt.lng, pt.lat]), [cycle[0].lng, cycle[0].lat]];
-      return {
-        cycle,
-        poly: turf.polygon([coords as any]),
-        connectionIds: new Set<string>(),
-        parcel: p,
-        id: p.id
-      };
-    }).filter((p): p is NonNullable<typeof p> => !!p);
-
-    // 2. Add any newly detected cycles that aren't already parcels (only in CONNECT mode)
-    const existingParcelCycleIds = new Set(parcels.map(p => [...p.pointIds].sort().join(',')));
-    const detectedCycles = mode === 'CONNECT' ? cycles.filter(cycle => {
-      const id = cycle.map(p => p.id).sort().join(',');
-      return !existingParcelCycleIds.has(id);
-    }).map(cycle => {
+    const polys = cycles.map(cycle => {
       const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
-      return {
-        cycle,
+      return { 
+        cycle, 
         poly: turf.polygon([coords as any]),
-        connectionIds: new Set<string>(),
-        parcel: null,
-        id: cycle.map(p => p.id).sort().join(','),
-        isDetected: true
+        connectionIds: new Set<string>()
       };
-    }) : [];
-
-    const allPolys = [
-      ...parcelItems.map(p => ({ ...p, isDetected: false })), 
-      ...detectedCycles
-    ];
+    });
 
     // Map connections to their IDs for easy lookup
-    allPolys.forEach(item => {
+    polys.forEach(item => {
       for (let i = 0; i < item.cycle.length; i++) {
         const p1 = item.cycle[i];
         const p2 = item.cycle[(i + 1) % item.cycle.length];
@@ -307,32 +276,36 @@ export default function MapView({
       }
     });
 
-    return allPolys.map(item => {
-      let gen = item.parcel?.generation;
+    return polys.map(item => {
+      const parcelId = item.cycle.map(p => p.id).sort().join(',');
+      const existingParcel = parcelMap.get(parcelId);
+      
+      let gen = existingParcel?.generation;
       
       if (!gen) {
         // Count how many other polygons contain this one
         let containers = 0;
         const itemCentroid = turf.centroid(item.poly);
         
-        for (const other of allPolys) {
+        for (const other of polys) {
           if (item === other) continue;
           try {
-            // Use a small buffer or booleanContains for more robust containment check
+            // Use centroid check for more robust land division generation detection
             if (turf.booleanPointInPolygon(itemCentroid, other.poly)) {
               containers++;
             }
-          } catch (e) {}
+          } catch (e) {
+            // Fallback
+          }
         }
         gen = containers + 1;
       }
       
       // Check if this cycle has children (other cycles contained within it)
-      const hasChildren = allPolys.some(other => {
+      const hasChildren = polys.some(other => {
         if (item === other) return false;
         try {
           const otherCentroid = turf.centroid(other.poly);
-          // If other is inside item, then item has children
           return turf.booleanPointInPolygon(otherCentroid, item.poly);
         } catch (e) {
           return false;
@@ -341,18 +314,12 @@ export default function MapView({
       
       return { ...item, gen, hasChildren, layerId: `layer-gen-${gen}` };
     });
-  }, [cycles, connections, parcels, pointMap]);
+  }, [cycles, connections, parcelMap]);
 
   const visibleConnectionIds = useMemo(() => {
     const ids = new Set<string>();
     cyclesWithGen.forEach(item => {
-      // If filter is 0 (All), we only show connections of parcels that HAVE NO CHILDREN
-      // to avoid seeing internal lines of parent parcels when not needed.
-      if (generationFilter === 0) {
-        if (!item.hasChildren) {
-          item.connectionIds.forEach(id => ids.add(id));
-        }
-      } else if (item.gen === generationFilter) {
+      if (generationFilter === 0 || item.gen === generationFilter) {
         item.connectionIds.forEach(id => ids.add(id));
       }
     });
@@ -379,8 +346,8 @@ export default function MapView({
       // Filter connections based on generation
       if (!visibleConnectionIds.has(conn.id) && mode !== 'CONNECT') return null;
 
-      const from = pointMap.get(conn.fromId);
-      const to = pointMap.get(conn.toId);
+      const from = points.find(p => p.id === conn.fromId);
+      const to = points.find(p => p.id === conn.toId);
       if (from && to) {
         return (
           <Polyline 
@@ -419,20 +386,10 @@ export default function MapView({
 
   const renderPolygons = () => {
     return cyclesWithGen.map((item, idx) => {
-      const { cycle, gen, poly, hasChildren, isDetected } = item;
+      const { cycle, gen, poly, hasChildren } = item;
       
-      // Strict generation filtering with Ghost support
-      const isGhost = generationFilter !== 0 && gen < generationFilter;
-      
-      // If it's a detected preview, we only show it in CONNECT mode
-      if (isDetected && mode !== 'CONNECT') return null;
-
-      if (generationFilter === 0) {
-        if (hasChildren && !isDetected) return null; // Only show leaf parcels when "All" is selected
-      } else {
-        if (gen > generationFilter) return null;
-        if (isGhost && !hasChildren) return null; // Only show parents of the current generation
-      }
+      // Strict generation filtering
+      if (generationFilter !== 0 && gen !== generationFilter) return null;
 
       const area = calculatePolygonArea(cycle);
       
@@ -449,7 +406,7 @@ export default function MapView({
       // Hide area card if the parcel has children (it's a parent in the current view)
       // This ensures we only see the "active" units for the current generation
       // In "All" mode, we hide the card if it has children to avoid clutter
-      const showAreaCard = !isGhost && isVisible && shouldShowDetails && (generationFilter !== 0 || !hasChildren) && !isDetected;
+      const showAreaCard = isVisible && shouldShowDetails && (generationFilter !== 0 || !hasChildren);
       
       // Calculate centroid for precise positioning
       const centroid = turf.centroid(poly);
@@ -468,30 +425,21 @@ export default function MapView({
           <Polygon 
             positions={cycle.map(p => [p.lat, p.lng])}
             pathOptions={{
-              color: isDetected ? '#94a3b8' : (isGhost ? '#94a3b8' : (isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b'))),
-              fillColor: isDetected ? 'transparent' : (isGhost ? 'transparent' : (isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b'))),
-              fillOpacity: isDetected ? 0 : (isGhost ? 0 : (isHighlighted ? 0.3 : 0.1)),
-              weight: isDetected ? 1 : (isGhost ? 1 : (isHighlighted ? 4 : 2)),
-              dashArray: isDetected ? '5, 5' : (isGhost ? '5, 10' : (isHighlighted ? '10, 10' : undefined)),
-              interactive: !isGhost
+              color: isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b'),
+              fillColor: isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b'),
+              fillOpacity: isHighlighted ? 0.3 : 0.1,
+              weight: isHighlighted ? 4 : 2,
+              dashArray: isHighlighted ? '10, 10' : undefined
             }}
             eventHandlers={{
               click: (e) => {
-                L.DomEvent.stopPropagation(e);
-                if (isDetected && onFormParcel) {
-                  onFormParcel(cycle);
-                } else if (!isGhost && (mode === 'DIVIDE' || mode === 'MANAGE' || mode === 'ROTATE') && onPolygonClick) {
+                if ((mode === 'DIVIDE' || mode === 'MANAGE' || mode === 'ROTATE') && onPolygonClick) {
+                  L.DomEvent.stopPropagation(e);
                   onPolygonClick(cycle);
                 }
               }
             }}
-          >
-            {isDetected && (
-              <Tooltip sticky direction="top" className="bg-slate-800 text-white border-none rounded-lg px-2 py-1 text-[10px] font-bold">
-                کلیک برای تشکیل قطعه
-              </Tooltip>
-            )}
-          </Polygon>
+          />
 
           {/* Centered Marker for Tooltips (Area Card & Owner Name) */}
           <Marker 
@@ -597,14 +545,14 @@ export default function MapView({
     if (!parcel) return null;
 
     const parcelPoints = parcel.pointIds
-      .map(id => pointMap.get(id))
+      .map(id => points.find(p => p.id === id))
       .filter((p): p is Point => !!p);
 
     if (parcelPoints.length < 3) return null;
 
     const [lat, lng] = getCentroid(parcelPoints);
     return { lat, lng };
-  }, [highlightedParcelId, parcels, pointMap]);
+  }, [highlightedParcelId, parcels, points]);
 
   const centerOn = useMemo(() => {
     if (centerTrigger && userLocation) return userLocation;

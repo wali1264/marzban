@@ -2,7 +2,6 @@ import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Box, X, CheckCircle2, AlertCircle, Zap, MapPin } from 'lucide-react';
 import { Point, Parcel, Division } from '../../types';
-import { calculatePolygonArea } from '../../utils';
 import * as turf from '@turf/turf';
 
 interface ConvertModalProps {
@@ -11,7 +10,7 @@ interface ConvertModalProps {
   parcel: Parcel;
   division: Division;
   points: Point[];
-  onConvert: (newPoints: Point[], newParcels: Parcel[]) => void;
+  onConvert: (newPoints: Point[], newParcel: Parcel) => void;
 }
 
 export default function ConvertModal({ isOpen, onClose, parcel, division, points, onConvert }: ConvertModalProps) {
@@ -21,12 +20,7 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
     return parcel.divisions.reduce((sum, d) => sum + d.percentage, 0);
   }, [parcel.divisions]);
 
-  const isComplete = parcel.isFullyAllocated || Math.abs(totalPercentage - 100) < 0.01;
-
-  const divisionArea = React.useMemo(() => {
-    const allPolygons = division.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
-    return turf.area(turf.featureCollection(allPolygons));
-  }, [division.geometry]);
+  const isComplete = Math.abs(totalPercentage - 100) < 0.01;
 
   const handleConvert = () => {
     if (!isComplete) return;
@@ -34,20 +28,10 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
     
     const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
     
-    const allNewPoints: Point[] = [];
-    const newParcels: Parcel[] = [];
+    const newPoints: Point[] = [];
+    const newPointIds: string[] = [];
     
-    // Global point grid to reuse points across all parts
-    const pointGrid = new Map<string, string>();
-    points.forEach(p => {
-      const key = `${Math.round(p.lng * 10000000)},${Math.round(p.lat * 10000000)}`;
-      pointGrid.set(key, p.id);
-    });
-
-    division.geometry.forEach((part, partIdx) => {
-      const partPointIds: string[] = [];
-      const addedInThisPart = new Set<string>();
-
+    division.geometry.forEach((part) => {
       part.forEach((coord, index) => {
         // Skip the last point if it's the same as the first (closed loop)
         if (index === part.length - 1 && 
@@ -56,13 +40,20 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
           return;
         }
 
-        const key = `${Math.round(coord[1] * 10000000)},${Math.round(coord[0] * 10000000)}`;
-        const existingPointId = pointGrid.get(key);
+        // Check if any of these coordinates already match existing points
+        // within a very small threshold (e.g., 1cm)
+        const existingPoint = points.find(p => {
+          const distance = turf.distance(
+            turf.point([p.lng, p.lat]),
+            turf.point([coord[1], coord[0]]), // Turf uses [lng, lat]
+            { units: 'meters' }
+          );
+          return distance < 0.01; // 1cm threshold
+        });
 
-        if (existingPointId) {
-          if (!addedInThisPart.has(existingPointId)) {
-            partPointIds.push(existingPointId);
-            addedInThisPart.add(existingPointId);
+        if (existingPoint) {
+          if (!newPointIds.includes(existingPoint.id)) {
+            newPointIds.push(existingPoint.id);
           }
         } else {
           const newId = generateId();
@@ -71,39 +62,29 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
             lng: coord[1],
             lat: coord[0],
             timestamp: Date.now(),
-            accuracy: 0.1
+            accuracy: 0.1 // High precision generated point
           };
-          allNewPoints.push(newPoint);
-          partPointIds.push(newId);
-          addedInThisPart.add(newId);
-          pointGrid.set(key, newId);
+          newPoints.push(newPoint);
+          newPointIds.push(newId);
         }
       });
-
-      if (partPointIds.length >= 3) {
-        const partArea = calculatePolygonArea(
-          partPointIds.map(id => {
-            const p = allNewPoints.find(pt => pt.id === id) || points.find(pt => pt.id === id);
-            return p!;
-          })
-        );
-
-        newParcels.push({
-          id: generateId(),
-          name: division.geometry.length > 1 
-            ? `قطعه ${partIdx + 1} از ${parcel.ownerName || 'زمین اصلی'}`
-            : `قطعه تفکیکی از ${parcel.ownerName || 'زمین اصلی'}`,
-          pointIds: partPointIds,
-          divisions: [],
-          area: partArea,
-          ownerName: parcel.ownerName,
-          generation: (parcel.generation || 1) + 1,
-          createdAt: Date.now()
-        });
-      }
     });
 
-    onConvert(allNewPoints, newParcels);
+    const allPolygons = division.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
+    const totalArea = turf.area(turf.featureCollection(allPolygons));
+
+    const newParcel: Parcel = {
+      id: generateId(),
+      name: `قطعه تفکیکی از ${parcel.ownerName || 'زمین اصلی'}`,
+      pointIds: newPointIds,
+      divisions: [],
+      area: totalArea,
+      ownerName: parcel.ownerName, // Carry over owner if exists
+      generation: (parcel.generation || 1) + 1,
+      createdAt: Date.now()
+    };
+
+    onConvert(newPoints, newParcel);
     setIsProcessing(false);
     onClose();
   };
@@ -138,7 +119,11 @@ export default function ConvertModal({ isOpen, onClose, parcel, division, points
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-500">مساحت سهم:</span>
                   <span className="font-bold text-slate-900">
-                    {Math.round(divisionArea).toLocaleString()} متر مربع
+                    {(() => {
+                      const allPolygons = division.geometry.map(g => turf.polygon([[...g.map(c => [c[1], c[0]]), [g[0][1], g[0][0]]]]));
+                      const area = turf.area(turf.featureCollection(allPolygons));
+                      return Math.round(area).toLocaleString();
+                    })()} متر مربع
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-sm">

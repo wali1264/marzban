@@ -132,55 +132,72 @@ export default function App() {
 
   // Clean up parcels that are no longer valid cycles
   useEffect(() => {
-    if (isUpdating) return; // Skip during restore or bulk updates
-    
     if (points.length === 0 || connections.length === 0) {
       if (parcels.length > 0) setParcels([]);
       return;
     }
     
-    const pointMap = new Map<string, Point>(points.map(p => [p.id, p]));
     const currentCycles = findCycles(points, connections);
-    const cycleIds = new Set(currentCycles.map(cycle => cycle.map(p => p.id).sort().join(',')));
+    const cycleIdsToPoints = new Map(currentCycles.map(cycle => [cycle.map(p => p.id).sort().join(','), cycle]));
+    const cycleIds = new Set(cycleIdsToPoints.keys());
     
     setParcels(prev => {
-      // Keep existing parcels that are still valid cycles
-      // OR have user-provided data (name, owner, divisions)
-      const stillValid = prev.filter(p => {
-        // Check if all its points still exist in the points array
-        const allPointsExist = p.pointIds.every(id => pointMap.has(id));
-        if (!allPointsExist) return false;
-
-        // If it's a minimal cycle found by the algorithm, it's definitely valid
-        if (cycleIds.has(p.pointIds.sort().join(','))) return true;
-        
-        // Keep it if it has user data OR it's a parent parcel (has divisions or is fully allocated)
-        // OR if it's a Gen 1 parcel (we should be very careful about deleting Gen 1)
-        const hasUserData = p.name || p.ownerName || p.divisions.length > 0 || (p.generation || 1) > 1 || p.isFullyAllocated;
-        if (hasUserData || p.generation === 1) return true;
-        
-        return false;
-      });
+      // 1. Keep existing parcels that are still valid
+      const stillValid = prev.filter(p => cycleIds.has(p.pointIds.sort().join(',')));
       
-      if (stillValid.length !== prev.length) return stillValid;
-      return prev;
+      // 2. Identify new cycles
+      const existingCycleIds = new Set(prev.map(p => p.pointIds.sort().join(',')));
+      const newCycleIds = Array.from(cycleIds).filter(id => !existingCycleIds.has(id));
+      
+      if (newCycleIds.length === 0) {
+        if (stillValid.length !== prev.length) return stillValid;
+        return prev;
+      }
+
+      // 3. Process new cycles
+      const newParcels: Parcel[] = [];
+      newCycleIds.forEach(id => {
+        const cyclePoints = cycleIdsToPoints.get(id)!;
+        const coords = [...cyclePoints.map(p => [p.lng, p.lat]), [cyclePoints[0].lng, cyclePoints[0].lat]];
+        const newPoly = turf.polygon([coords as any]);
+        
+        // Check if it's merged from old ones
+        const mergedFrom = prev.filter(old => {
+          const oldCycle = old.pointIds.map(pid => points.find(p => p.id === pid)!).filter(Boolean);
+          if (oldCycle.length < 3) return false;
+          const oldCoords = [...oldCycle.map(p => [p.lng, p.lat]), [oldCycle[0].lng, oldCycle[0].lat]];
+          const oldPoly = turf.polygon([oldCoords as any]);
+          try {
+            return turf.booleanContains(newPoly, oldPoly);
+          } catch (e) { return false; }
+        });
+
+        if (mergedFrom.length > 0) {
+          const oldest = [...mergedFrom].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))[0];
+          newParcels.push({
+            ...oldest,
+            pointIds: cyclePoints.map(p => p.id),
+            area: calculatePolygonArea(cyclePoints),
+            generation: getGenerationForParcel(cyclePoints.map(p => p.id), prev)
+          });
+        } else {
+          // Brand new cycle - Add as Gen 1
+          newParcels.push({
+            id: generateId(),
+            name: '',
+            pointIds: cyclePoints.map(p => p.id),
+            ownerName: '',
+            divisions: [],
+            area: calculatePolygonArea(cyclePoints),
+            generation: 1,
+            createdAt: Date.now()
+          });
+        }
+      });
+
+      return [...stillValid, ...newParcels];
     });
   }, [connections, points]);
-
-  const handleFormParcel = (cycle: Point[]) => {
-    const pointMap = new Map<string, Point>(points.map(p => [p.id, p]));
-    const newParcel: Parcel = {
-      id: generateId(),
-      name: `قطعه ${parcels.length + 1}`,
-      pointIds: cycle.map(p => p.id),
-      ownerName: '',
-      divisions: [],
-      area: calculatePolygonArea(cycle),
-      generation: getGenerationForParcel(cycle.map(p => p.id), parcels, pointMap),
-      createdAt: Date.now()
-    };
-    setParcels(prev => [...prev, newParcel]);
-  };
 
   const [showDivisionModal, setShowDivisionModal] = useState(false);
   const [selectedCycle, setSelectedCycle] = useState<Point[] | null>(null);
@@ -209,9 +226,8 @@ export default function App() {
   const [adminPassword, setAdminPassword] = useState('');
   const [showResetMenu, setShowResetMenu] = useState(false);
 
-  const getGenerationForParcel = (pointIds: string[], currentParcels: Parcel[], pointMap?: Map<string, Point>) => {
-    const pMap = pointMap || new Map(points.map(p => [p.id, p]));
-    const cycle = pointIds.map(id => pMap.get(id)!).filter(Boolean);
+  const getGenerationForParcel = (pointIds: string[], currentParcels: Parcel[]) => {
+    const cycle = pointIds.map(id => points.find(p => p.id === id)!).filter(Boolean);
     if (cycle.length < 3) return 1;
     
     const coords = [...cycle.map(p => [p.lng, p.lat]), [cycle[0].lng, cycle[0].lat]];
@@ -221,7 +237,7 @@ export default function App() {
     currentParcels.forEach(other => {
       if (other.pointIds.sort().join(',') === pointIds.sort().join(',')) return;
       
-      const otherCycle = other.pointIds.map(id => pMap.get(id)!).filter(Boolean);
+      const otherCycle = other.pointIds.map(id => points.find(p => p.id === id)!).filter(Boolean);
       if (otherCycle.length < 3) return;
 
       const otherCoords = [...otherCycle.map(p => [p.lng, p.lat]), [otherCycle[0].lng, otherCycle[0].lat]];
@@ -958,51 +974,27 @@ export default function App() {
   };
 
   const handleRestore = (data: { points: Point[]; connections: Connection[]; parcels: Parcel[] }) => {
-    // Flag to prevent the useEffect from cleaning up during restore
-    setIsUpdating(true);
-    
-    // Ensure all restored parcels have at least generation 1 if missing
-    const sanitizedParcels = data.parcels.map(p => ({
-      ...p,
-      generation: p.generation || 1,
-      divisions: p.divisions || []
-    }));
-
     setPoints(data.points);
     setConnections(data.connections);
-    setParcels(sanitizedParcels);
-    
-    // Allow the UI to settle before re-enabling sync
-    setTimeout(() => setIsUpdating(false), 500);
+    setParcels(data.parcels);
   };
 
-  const handleConvertShare = (newPoints: Point[], newParcels: Parcel[]) => {
+  const handleConvertShare = (newPoints: Point[], newParcel: Parcel) => {
     // Add new points without removing old ones to preserve Gen 1
     setPoints(prev => [...prev, ...newPoints]);
     
     // Create new connections for the Gen 2 parcel specifically
-    // Use a Set for fast lookup of existing connections
-    const existingConnSet = new Set(connections.map(c => 
-      [c.fromId, c.toId].sort().join('-')
-    ));
-
     const newConns: Connection[] = [];
-    newParcels.forEach(p => {
-      for (let i = 0; i < p.pointIds.length; i++) {
-        const fromId = p.pointIds[i];
-        const toId = p.pointIds[(i + 1) % p.pointIds.length];
-        
-        const key = [fromId, toId].sort().join('-');
-        if (!existingConnSet.has(key)) {
-          newConns.push({
-            id: generateId(),
-            fromId,
-            toId
-          });
-          existingConnSet.add(key); // Prevent duplicates within the new set too
-        }
-      }
-    });
+    for (let i = 0; i < newParcel.pointIds.length; i++) {
+      const fromId = newParcel.pointIds[i];
+      const toId = newParcel.pointIds[(i + 1) % newParcel.pointIds.length];
+      
+      newConns.push({
+        id: generateId(),
+        fromId,
+        toId
+      });
+    }
     
     setConnections(prev => [...prev, ...newConns]);
     
@@ -1011,17 +1003,22 @@ export default function App() {
     setParcels(prev => {
       const updatedParcels = prev.map(p => {
         if (selectedParcelForConversion && p.id === selectedParcelForConversion.id && selectedDivisionForConversion) {
-          const remainingDivisions = p.divisions.filter(d => d.id !== selectedDivisionForConversion.id);
           return {
             ...p,
-            divisions: remainingDivisions,
-            isFullyAllocated: remainingDivisions.length === 0 // Only fully allocated if no divisions left
+            divisions: p.divisions.filter(d => d.id !== selectedDivisionForConversion.id)
           };
         }
         return p;
       });
 
-      return [...updatedParcels, ...newParcels];
+      const parcelWithTimestamp = {
+        ...newParcel,
+        id: generateId(),
+        parentId: selectedParcelForConversion?.id,
+        generation: (selectedParcelForConversion?.generation || 1) + 1,
+        createdAt: Date.now()
+      };
+      return [...updatedParcels, parcelWithTimestamp];
     });
     
     setShowConvertModal(false);
@@ -1281,7 +1278,6 @@ export default function App() {
             }
           }}
           onDivisionLongPress={(pId, dId) => setPendingDivisionAction({ parcelId: pId, divId: dId, type: 'DELETE' })}
-          onFormParcel={handleFormParcel}
           userLocation={userLocation}
           showUserLocation={showUserLocation}
           selectedPointId={selectedPointId}
