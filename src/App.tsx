@@ -1006,7 +1006,9 @@ export default function App() {
               ...p, 
               ownerName: ownerNameInput,
               area: calculatePolygonArea(p.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean)),
-              generation: getGenerationForParcel(p.pointIds, prev)
+              generation: p.parentId 
+                ? (prev.find(parent => parent.id === p.parentId)?.generation || 1) + 1
+                : getGenerationForParcel(p.pointIds, prev)
             } : p
           );
         } else {
@@ -1015,7 +1017,9 @@ export default function App() {
             ...selectedParcelForOwner, 
             ownerName: ownerNameInput,
             area: calculatePolygonArea(selectedParcelForOwner.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean)),
-            generation: getGenerationForParcel(selectedParcelForOwner.pointIds, prev)
+            generation: selectedParcelForOwner.parentId
+              ? (prev.find(parent => parent.id === selectedParcelForOwner.parentId)?.generation || 1) + 1
+              : getGenerationForParcel(selectedParcelForOwner.pointIds, prev)
           };
           return [...prev, newParcel];
         }
