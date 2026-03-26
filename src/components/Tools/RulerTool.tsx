@@ -113,11 +113,11 @@ export default function RulerTool({ startPoint, endPoint, userLocation }: RulerT
         position={rulerData.handlePos}
         draggable={true}
         eventHandlers={{
-          drag: (e) => {
+          dragend: (e) => {
             const marker = e.target;
             const pos = marker.getLatLng();
             
-            // 1. Project current mouse position onto the line (The "Rail" Logic)
+            // Project final drag position onto the line to find nearest point
             const line = turf.lineString([
               [startPoint!.lng, startPoint!.lat],
               [endPoint!.lng, endPoint!.lat]
@@ -125,11 +125,7 @@ export default function RulerTool({ startPoint, endPoint, userLocation }: RulerT
             const pt = turf.point([pos.lng, pos.lat]);
             const snapped = turf.nearestPointOnLine(line, pt, { units: 'meters' });
             
-            // 2. Force the marker to stay on the line visually
-            const [sLng, sLat] = snapped.geometry.coordinates;
-            marker.setLatLng([sLat, sLng]);
-
-            // 3. Update progress for the distance calculation
+            // Calculate progress along line
             const totalDist = turf.length(line, { units: 'meters' });
             const distFromStart = turf.distance(
               turf.point([startPoint!.lng, startPoint!.lat]),
@@ -143,8 +139,7 @@ export default function RulerTool({ startPoint, endPoint, userLocation }: RulerT
         icon={L.divIcon({
           className: 'ruler-handle',
           html: `
-            <div class="relative flex flex-col items-center justify-end h-[160px] w-[140px]">
-              {/* Card Container */}
+            <div class="relative flex flex-col items-center" style="width: 140px; height: 160px;">
               <div class="bg-white px-5 py-3 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.2)] border-2 border-amber-500 flex flex-col items-center min-w-[120px] cursor-grab active:cursor-grabbing">
                 <div class="flex items-center gap-2 mb-1">
                   <div class="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse"></div>
@@ -159,17 +154,15 @@ export default function RulerTool({ startPoint, endPoint, userLocation }: RulerT
                 </div>
               </div>
               
-              {/* Connector Line */}
               <div class="w-0.5 h-8 bg-amber-500 shadow-sm"></div>
               
-              {/* The "Rail" Point - This must be at the anchor point */}
-              <div class="w-6 h-6 bg-amber-500 rounded-full border-4 border-white shadow-xl flex items-center justify-center mb-[12px]">
+              <div class="w-6 h-6 bg-amber-500 rounded-full border-4 border-white shadow-xl flex items-center justify-center">
                 <div class="w-1.5 h-1.5 bg-white rounded-full"></div>
               </div>
             </div>
           `,
           iconSize: [140, 160],
-          iconAnchor: [70, 136] // 160 (total height) - 12 (half of dot) - 12 (bottom margin) = 136
+          iconAnchor: [70, 148] // Center of the 24px dot (160 - 12 = 148)
         })}
       />
     </>
