@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import KalmanFilter from 'kalmanjs';
 import { 
@@ -38,6 +38,7 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
   
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const watchIdRef = useRef<number | null>(null);
+  const motionHandlerRef = useRef<((event: DeviceMotionEvent) => void) | null>(null);
   const kalmanLat = useRef(new KalmanFilter({ R: 0.1, Q: 1 })); // Initial conservative values
   const kalmanLng = useRef(new KalmanFilter({ R: 0.1, Q: 1 }));
   const lastValidReading = useRef<{ lat: number, lng: number } | null>(null);
@@ -116,33 +117,44 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
           setReadings(prev => [...prev, newReading]);
         },
         (err) => {
-          console.error(err);
-          setError("خطا در دریافت سیگنال GPS");
-          stopObservation();
+          console.error("GPS Error:", err);
+          // Only show error if it's not a timeout (we'll keep trying if it's just a timeout)
+          // or if we have no readings yet.
+          if (err.code !== err.TIMEOUT || readings.length === 0) {
+            setError("خطا در دریافت سیگنال GPS: " + (err.message || "سیگنال یافت نشد"));
+            stopObservation();
+          }
         },
-        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+        { enableHighAccuracy: true, timeout: 30000, maximumAge: 3000 }
       );
 
       // Start Motion Detection (Sensor Fusion)
+      let lastMotionUpdate = 0;
       const handleMotion = (event: DeviceMotionEvent) => {
         const acc = event.accelerationIncludingGravity;
         if (acc && acc.x !== null && acc.y !== null && acc.z !== null) {
           motionRef.current.push({ x: acc.x, y: acc.y, z: acc.z });
           if (motionRef.current.length > 20) motionRef.current.shift();
 
-          // Calculate stability (variance of acceleration)
-          const variance = motionRef.current.reduce((acc, val, i, arr) => {
-            if (i === 0) return 0;
-            const prev = arr[i-1];
-            return acc + Math.abs(val.x - prev.x) + Math.abs(val.y - prev.y) + Math.abs(val.z - prev.z);
-          }, 0) / motionRef.current.length;
+          const now = Date.now();
+          if (now - lastMotionUpdate > 100) { // Throttle to 10Hz
+            // Calculate stability (variance of acceleration)
+            const variance = motionRef.current.reduce((acc, val, i, arr) => {
+              if (i === 0) return 0;
+              const prev = arr[i-1];
+              return acc + Math.abs(val.x - prev.x) + Math.abs(val.y - prev.y) + Math.abs(val.z - prev.z);
+            }, 0) / motionRef.current.length;
 
-          // Expert Threshold: 0.2 is the noise floor for a high-end smartphone on a table
-          const stabilityVal = Math.max(0, Math.min(100, 100 - (variance * 50)));
-          setStability(stabilityVal);
-          setIsMoving(variance > 0.25); // Strict threshold for "Stationary"
+            // Expert Threshold: 0.2 is the noise floor for a high-end smartphone on a table
+            const stabilityVal = Math.max(0, Math.min(100, 100 - (variance * 50)));
+            setStability(stabilityVal);
+            setIsMoving(variance > 0.25); // Strict threshold for "Stationary"
+            lastMotionUpdate = now;
+          }
         }
       };
+      
+      motionHandlerRef.current = handleMotion;
 
       if (typeof DeviceMotionEvent !== 'undefined' && typeof (DeviceMotionEvent as any).requestPermission === 'function') {
         (DeviceMotionEvent as any).requestPermission()
@@ -181,7 +193,10 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
     setIsProcessing(false);
     if (timerRef.current) clearInterval(timerRef.current);
     if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
-    window.removeEventListener('devicemotion', () => {});
+    if (motionHandlerRef.current) {
+      window.removeEventListener('devicemotion', motionHandlerRef.current);
+      motionHandlerRef.current = null;
+    }
   };
 
   useEffect(() => {
@@ -189,7 +204,7 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
     return () => stopObservation();
   }, []);
 
-  const getWeightedAverage = () => {
+  const bestReading = useMemo(() => {
     if (readings.length === 0) return currentReading;
     
     // 1. Spatial Density Clustering (The "5-Meter Rule")
@@ -215,7 +230,7 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
     // We only look at the last 50 readings to keep it responsive
     const recentReadings = readings.slice(-50);
 
-    recentReadings.forEach((p1, i) => {
+    recentReadings.forEach((p1) => {
       const neighbors = recentReadings.filter(p2 => getDistance(p1, p2) <= 5);
       if (neighbors.length > maxNeighbors) {
         maxNeighbors = neighbors.length;
@@ -225,19 +240,6 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
 
     // If we couldn't find a cluster (unlikely), fall back to all readings
     const targetReadings = bestCluster.length > 0 ? bestCluster : readings;
-
-    // Calculate Spatial Confidence (Percentage of points within 5m cluster)
-    if (recentReadings.length > 0) {
-      const confidence = (bestCluster.length / recentReadings.length) * 100;
-      setSpatialConfidence(confidence);
-      
-      // Auto-Settling Logic: Progress increases only when stable and confident
-      if (confidence > 80 && stability > 90 && !isMoving) {
-        setSettleProgress(prev => Math.min(100, prev + 2)); // Takes ~50 stable readings (~10-20s)
-      } else if (isMoving) {
-        setSettleProgress(prev => Math.max(0, prev - 5)); // Rapidly reset on movement
-      }
-    }
 
     // 2. Weighted average based on accuracy (Inverse Variance Weighting)
     let totalWeight = 0;
@@ -262,11 +264,29 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
     return {
       lat: (weightedLat / totalWeight) + offset.lat,
       lng: (weightedLng / totalWeight) + offset.lng,
-      accuracy: minAccuracy 
+      accuracy: minAccuracy,
+      spatialConfidence: recentReadings.length > 0 ? (bestCluster.length / recentReadings.length) * 100 : 0
     };
-  };
+  }, [readings, currentReading, gnssConfig.locationOffset]);
 
-  const bestReading = getWeightedAverage();
+  // Update confidence and settling progress based on readings
+  useEffect(() => {
+    if (bestReading) {
+      setSpatialConfidence(bestReading.spatialConfidence);
+    }
+  }, [bestReading?.spatialConfidence]);
+
+  useEffect(() => {
+    if (isMoving) {
+      setSettleProgress(prev => Math.max(0, prev - 10)); // Rapidly reset on movement
+    }
+  }, [isMoving]);
+
+  useEffect(() => {
+    if (bestReading && bestReading.spatialConfidence > 80 && stability > 90 && !isMoving) {
+      setSettleProgress(prev => Math.min(100, prev + 2)); // Takes ~50 stable readings (~10-20s)
+    }
+  }, [readings.length]); // Only increment when a new reading arrives, not on every motion update
   
   // Survey Grade Logic
   const hdop = bestReading ? (bestReading.accuracy / 4.5).toFixed(2) : "---";
