@@ -187,24 +187,8 @@ export default function App() {
         return p;
       });
 
-      // 2. Keep parcels if they are still valid cycles (points and connections exist)
-      // This preserves historical parent parcels even if they are no longer "minimal" cycles
-      const stillValid = updatedParcels.filter(p => {
-        // Check if all points still exist
-        const pPoints = p.pointIds.map(id => points.find(pt => pt.id === id)).filter(Boolean);
-        if (pPoints.length < 3) return false;
-
-        // Check if all connections still exist
-        for (let i = 0; i < p.pointIds.length; i++) {
-          const p1 = p.pointIds[i];
-          const p2 = p.pointIds[(i + 1) % p.pointIds.length];
-          const connExists = connections.some(c => 
-            (c.fromId === p1 && c.toId === p2) || (c.fromId === p2 && c.toId === p1)
-          );
-          if (!connExists) return false;
-        }
-        return true;
-      });
+      // 2. Keep only those that were matched or are still valid
+      const stillValid = updatedParcels.filter(p => matchedCycleIds.has(p.pointIds.sort().join(',')));
       
       // 3. Identify brand new cycles
       const newCycleIds = Array.from(cycleIds).filter(id => !matchedCycleIds.has(id));
@@ -999,18 +983,14 @@ export default function App() {
   const handleUpdateOwner = () => {
     if (selectedParcelForOwner) {
       setParcels(prev => {
-        const existingParcel = prev.find(p => p.id === selectedParcelForOwner.id);
-        if (existingParcel) {
-          // Just update the name, don't recalculate area or generation unless missing
+        const exists = prev.some(p => p.id === selectedParcelForOwner.id);
+        if (exists) {
           return prev.map(p => 
             p.id === selectedParcelForOwner.id ? { 
               ...p, 
               ownerName: ownerNameInput,
-              // Only calculate if not already set
-              area: p.area || calculatePolygonArea(p.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean)),
-              generation: p.generation || (p.parentId 
-                ? (prev.find(parent => parent.id === p.parentId)?.generation || 1) + 1
-                : getGenerationForParcel(p.pointIds, prev))
+              area: calculatePolygonArea(p.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean)),
+              generation: getGenerationForParcel(p.pointIds, prev)
             } : p
           );
         } else {
@@ -1019,9 +999,7 @@ export default function App() {
             ...selectedParcelForOwner, 
             ownerName: ownerNameInput,
             area: calculatePolygonArea(selectedParcelForOwner.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean)),
-            generation: selectedParcelForOwner.generation || (selectedParcelForOwner.parentId
-              ? (prev.find(parent => parent.id === selectedParcelForOwner.parentId)?.generation || 1) + 1
-              : getGenerationForParcel(selectedParcelForOwner.pointIds, prev))
+            generation: getGenerationForParcel(selectedParcelForOwner.pointIds, prev)
           };
           return [...prev, newParcel];
         }

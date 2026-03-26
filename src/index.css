@@ -65,23 +65,10 @@ body {
 /* Custom Tooltip Styling */
 .leaflet-tooltip.area-tooltip,
 .leaflet-tooltip.owner-watermark-tooltip {
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  padding: 0 !important;
-  pointer-events: none !important;
-}
-
-.owner-watermark-text {
-  font-family: 'Inter', sans-serif;
-  font-weight: 900;
-  text-transform: uppercase;
-  white-space: nowrap;
-  pointer-events: none;
-  user-select: none;
-  letter-spacing: 0.1em;
-  opacity: 0.15;
-  color: #475569;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
 }
 
 .leaflet-tooltip-top.area-tooltip:before,

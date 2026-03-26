@@ -19,7 +19,7 @@ export function calculatePolygonArea(nodes: Point[]): number {
   }
 }
 
-// Find all minimal cycles (internal faces) in the planar graph of connections
+// Find all minimal cycles (faces) in the planar graph of connections
 export function findCycles(points: Point[], connections: Connection[]): Point[][] {
   const adj = new Map<string, string[]>();
   connections.forEach(c => {
@@ -31,14 +31,13 @@ export function findCycles(points: Point[], connections: Connection[]): Point[][
 
   const pointMap = new Map(points.map(p => [p.id, p]));
   
-  // Sort neighbors by angle for each node (Counter-Clockwise)
+  // Sort neighbors by angle for each node
   const sortedAdj = new Map<string, string[]>();
   adj.forEach((neighbors, uId) => {
     const u = pointMap.get(uId)!;
     const sorted = [...neighbors].sort((aId, bId) => {
       const a = pointMap.get(aId)!;
       const b = pointMap.get(bId)!;
-      // Math.atan2 returns angle in (-PI, PI]
       return Math.atan2(a.lat - u.lat, a.lng - u.lng) - Math.atan2(b.lat - u.lat, b.lng - u.lng);
     });
     sortedAdj.set(uId, sorted);
@@ -56,14 +55,13 @@ export function findCycles(points: Point[], connections: Connection[]): Point[][
       let curr = vId;
       let prev = uId;
 
-      // Trace the face using the "left-hand rule" (always take the leftmost turn)
       while (curr !== uId && cycle.length < 100) {
         usedEdges.add(`${prev}->${curr}`);
         cycle.push(curr);
         
         const nextNeighbors = sortedAdj.get(curr)!;
         const prevIdx = nextNeighbors.indexOf(prev);
-        // Leftmost turn in CCW sorted list is the previous element
+        // The "next" edge is the one immediately counter-clockwise to (curr, prev)
         const nextIdx = (prevIdx - 1 + nextNeighbors.length) % nextNeighbors.length;
         const next = nextNeighbors[nextIdx];
         
@@ -73,32 +71,28 @@ export function findCycles(points: Point[], connections: Connection[]): Point[][
 
       if (curr === uId && cycle.length >= 3) {
         usedEdges.add(`${prev}->${curr}`);
-        
+        // Calculate signed area to ensure it's a counter-clockwise cycle (internal face)
+        // In Leaflet/Turf, CCW is usually positive area for the outer ring
         const cyclePoints = cycle.map(id => pointMap.get(id)!);
         const coords = [...cyclePoints.map(p => [p.lng, p.lat]), [cyclePoints[0].lng, cyclePoints[0].lat]];
+        const poly = turf.polygon([coords as any]);
+        const area = turf.area(poly);
         
-        try {
-          const poly = turf.polygon([coords as any]);
-          
-          // In the left-hand rule with CCW sorted neighbors:
-          // Internal faces are traced Counter-Clockwise (positive signed area)
-          // The external face is traced Clockwise (negative signed area)
-          // We use turf.booleanClockwise to filter out the external face.
-          // booleanClockwise expects a LineString or Position[]
-          if (!turf.booleanClockwise(coords as any)) {
-            const sortedCycle = [...cycle].sort().join(',');
-            if (!cycles.some(c => [...c].sort().join(',') === sortedCycle)) {
-              cycles.push(cycle);
-            }
-          }
-        } catch (e) {
-          // Ignore invalid polygons
+        // We only want "internal" faces. A simple heuristic is to check if the area is positive
+        // and if it's not the "infinite" outer face. 
+        // For our purposes, we'll just keep all cycles and filter by area later if needed.
+        // But the "left-hand rule" usually gives internal faces if we pick the next edge CCW.
+        
+        // Check if this cycle is already found (in any rotation)
+        const sortedCycle = [...cycle].sort().join(',');
+        if (!cycles.some(c => [...c].sort().join(',') === sortedCycle)) {
+          cycles.push(cycle);
         }
       }
     });
   });
 
   return cycles.map(cycleIds => 
-    cycleIds.map(id => pointMap.get(id)!).filter(Boolean)
+    cycleIds.map(id => points.find(p => p.id === id)!).filter(Boolean)
   );
 }
