@@ -999,16 +999,18 @@ export default function App() {
   const handleUpdateOwner = () => {
     if (selectedParcelForOwner) {
       setParcels(prev => {
-        const exists = prev.some(p => p.id === selectedParcelForOwner.id);
-        if (exists) {
+        const existingParcel = prev.find(p => p.id === selectedParcelForOwner.id);
+        if (existingParcel) {
+          // Just update the name, don't recalculate area or generation unless missing
           return prev.map(p => 
             p.id === selectedParcelForOwner.id ? { 
               ...p, 
               ownerName: ownerNameInput,
-              area: calculatePolygonArea(p.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean)),
-              generation: p.parentId 
+              // Only calculate if not already set
+              area: p.area || calculatePolygonArea(p.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean)),
+              generation: p.generation || (p.parentId 
                 ? (prev.find(parent => parent.id === p.parentId)?.generation || 1) + 1
-                : getGenerationForParcel(p.pointIds, prev)
+                : getGenerationForParcel(p.pointIds, prev))
             } : p
           );
         } else {
@@ -1017,9 +1019,9 @@ export default function App() {
             ...selectedParcelForOwner, 
             ownerName: ownerNameInput,
             area: calculatePolygonArea(selectedParcelForOwner.pointIds.map(id => points.find(pt => pt.id === id)!).filter(Boolean)),
-            generation: selectedParcelForOwner.parentId
+            generation: selectedParcelForOwner.generation || (selectedParcelForOwner.parentId
               ? (prev.find(parent => parent.id === selectedParcelForOwner.parentId)?.generation || 1) + 1
-              : getGenerationForParcel(selectedParcelForOwner.pointIds, prev)
+              : getGenerationForParcel(selectedParcelForOwner.pointIds, prev))
           };
           return [...prev, newParcel];
         }

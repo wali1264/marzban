@@ -427,12 +427,12 @@ export default function MapView({
       });
     }
 
-    // 3. Connections not in any cycle
+    // 3. Connections not in any cycle - ONLY show if in CONNECT mode
     const connsInCycles = new Set<string>();
     cyclesWithGen.forEach(item => item.connectionIds.forEach(id => connsInCycles.add(id)));
 
-    return connections.filter(c => visibleConnIds.has(c.id) || !connsInCycles.has(c.id));
-  }, [connections, generationFilter, cyclesWithGen, parcels]);
+    return connections.filter(c => visibleConnIds.has(c.id) || (mode === 'CONNECT' && !connsInCycles.has(c.id)));
+  }, [connections, generationFilter, cyclesWithGen, parcels, mode]);
 
   const visibleConnectionIds = useMemo(() => {
     const ids = new Set<string>();
