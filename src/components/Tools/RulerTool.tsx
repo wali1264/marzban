@@ -113,11 +113,11 @@ export default function RulerTool({ startPoint, endPoint, userLocation }: RulerT
         position={rulerData.handlePos}
         draggable={true}
         eventHandlers={{
-          drag: (e) => {
+          dragend: (e) => {
             const marker = e.target;
             const pos = marker.getLatLng();
             
-            // Project current drag position onto the line to find nearest point
+            // Project final drag position onto the line to find nearest point
             const line = turf.lineString([
               [startPoint!.lng, startPoint!.lat],
               [endPoint!.lng, endPoint!.lat]
@@ -139,8 +139,8 @@ export default function RulerTool({ startPoint, endPoint, userLocation }: RulerT
         icon={L.divIcon({
           className: 'ruler-handle',
           html: `
-            <div class="relative flex flex-col items-center" style="transform: translateY(-50%)">
-              <div class="bg-white px-5 py-3 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.2)] border-2 border-amber-500 flex flex-col items-center min-w-[120px] active:scale-105 transition-transform cursor-grab active:cursor-grabbing">
+            <div class="relative flex flex-col items-center">
+              <div class="bg-white px-5 py-3 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.2)] border-2 border-amber-500 flex flex-col items-center min-w-[120px] transition-transform cursor-grab active:cursor-grabbing">
                 <div class="flex items-center gap-2 mb-1">
                   <div class="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse"></div>
                   <span class="text-[10px] text-slate-400 font-black uppercase tracking-[0.2em]">فاصله دیجیتال</span>
@@ -159,8 +159,8 @@ export default function RulerTool({ startPoint, endPoint, userLocation }: RulerT
               </div>
             </div>
           `,
-          iconSize: [140, 100],
-          iconAnchor: [70, 90]
+          iconSize: [140, 120],
+          iconAnchor: [70, 108]
         })}
       />
     </>
