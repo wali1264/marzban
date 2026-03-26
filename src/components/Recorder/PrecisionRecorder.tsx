@@ -68,53 +68,62 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
       // Start watching position
       watchIdRef.current = navigator.geolocation.watchPosition(
         (position) => {
-          // 1. HARD FILTER: Reject low accuracy or network-based fallbacks
-          if (position.coords.accuracy > 15) return;
-
-          // 2. ZERO-VELOCITY CONSTRAINT (ZVC)
-          // If the IMU (accelerometer) says we are NOT moving, but GPS says we are,
-          // we treat the GPS change as Multipath Noise.
+          // 1. SOFT FILTER: Accept all for display, but be selective for the "best cluster" later
+          // We no longer return early, allowing the UI to show coordinates immediately.
           
           let targetLat = position.coords.latitude;
           let targetLng = position.coords.longitude;
 
-          if (!isMoving && lastValidReading.current) {
-            // Calculate distance from last reading
-            const dist = Math.sqrt(
-              Math.pow(targetLat - lastValidReading.current.lat, 2) + 
-              Math.pow(targetLng - lastValidReading.current.lng, 2)
-            );
-            
-            // If jump is small (< 0.0001 degrees ~ 10m) and we are stationary, 
-            // it's almost certainly GNSS Wander. We damp it heavily.
-            if (dist < 0.0001) {
-              // Increase R dynamically: Trust the sensor even LESS because we know we are stationary
-              kalmanLat.current.R = 10.0; 
-              kalmanLng.current.R = 10.0;
+          // Only add to readings if accuracy is somewhat reasonable (< 30m) to avoid polluting the cluster
+          if (position.coords.accuracy < 30) {
+            // 2. ZERO-VELOCITY CONSTRAINT (ZVC)
+            if (!isMoving && lastValidReading.current) {
+              const dist = Math.sqrt(
+                Math.pow(targetLat - lastValidReading.current.lat, 2) + 
+                Math.pow(targetLng - lastValidReading.current.lng, 2)
+              );
+              
+              if (dist < 0.0001) {
+                kalmanLat.current.R = 10.0; 
+                kalmanLng.current.R = 10.0;
+              } else {
+                // Multipath rejection: If jump is too large while stationary, don't add to readings
+                // but still update currentReading for UI feedback
+                setCurrentReading({
+                  lat: targetLat,
+                  lng: targetLng,
+                  accuracy: position.coords.accuracy,
+                  altitude: position.coords.altitude
+                });
+                return;
+              }
             } else {
-              // Large jump while stationary? Likely a massive Multipath error. Reject it.
-              return;
+              kalmanLat.current.R = 0.1;
+              kalmanLng.current.R = 0.1;
             }
+
+            const filteredLat = kalmanLat.current.filter(targetLat);
+            const filteredLng = kalmanLng.current.filter(targetLng);
+
+            const newReading = {
+              lat: filteredLat,
+              lng: filteredLng,
+              accuracy: position.coords.accuracy,
+              altitude: position.coords.altitude
+            };
+            
+            lastValidReading.current = { lat: filteredLat, lng: filteredLng };
+            setCurrentReading(newReading);
+            setReadings(prev => [...prev, newReading]);
           } else {
-            // We are moving: Trust the sensor more (Lower R)
-            kalmanLat.current.R = 0.1;
-            kalmanLng.current.R = 0.1;
+            // Very poor accuracy: Just update UI, don't add to survey data
+            setCurrentReading({
+              lat: targetLat,
+              lng: targetLng,
+              accuracy: position.coords.accuracy,
+              altitude: position.coords.altitude
+            });
           }
-
-          // 3. Apply Kalman Filter
-          const filteredLat = kalmanLat.current.filter(targetLat);
-          const filteredLng = kalmanLng.current.filter(targetLng);
-
-          const newReading = {
-            lat: filteredLat,
-            lng: filteredLng,
-            accuracy: position.coords.accuracy,
-            altitude: position.coords.altitude
-          };
-          
-          lastValidReading.current = { lat: filteredLat, lng: filteredLng };
-          setCurrentReading(newReading);
-          setReadings(prev => [...prev, newReading]);
         },
         (err) => {
           console.error("GPS Error:", err);
@@ -346,11 +355,23 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
         <div className="absolute -bottom-4 -left-4 w-12 h-12 border-b-4 border-l-4 border-emerald-500/40 rounded-bl-2xl" />
         <div className="absolute -bottom-4 -right-4 w-12 h-12 border-b-4 border-r-4 border-emerald-500/40 rounded-br-2xl" />
 
-        {/* Satellite Indicators */}
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-8 flex gap-1">
-          {[...Array(12)].map((_, i) => (
-            <div key={i} className={cn("w-1.5 h-3 rounded-full transition-all duration-500", i < satellites ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" : "bg-slate-800")} />
-          ))}
+        {/* Satellite Indicators & Background Tasks */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-8 flex flex-col items-center gap-3">
+          <div className="flex gap-1">
+            {[...Array(12)].map((_, i) => (
+              <div key={i} className={cn("w-1.5 h-3 rounded-full transition-all duration-500", i < satellites ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" : "bg-slate-800")} />
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
+              <ShieldCheck className="w-2.5 h-2.5 text-emerald-400" />
+              <span className="text-[7px] font-black text-emerald-400 uppercase tracking-tighter">KALMAN ACTIVE</span>
+            </div>
+            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-blue-500/10 border border-blue-500/20 rounded-full">
+              <Smartphone className="w-2.5 h-2.5 text-blue-400" />
+              <span className="text-[7px] font-black text-blue-400 uppercase tracking-tighter">IMU FUSION</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -517,33 +538,27 @@ export default function PrecisionRecorder({ onConfirm, onCancel, gnssStatus, gns
           )}
         </div>
 
-        {!isProcessing && bestReading && (
+        {!isProcessing && (bestReading || currentReading) && (
           <div className="space-y-4 w-full">
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-emerald-500/5 border border-emerald-500/10 p-3 rounded-2xl flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                <span className="text-[10px] font-bold text-emerald-400">فیلتر کالمن فعال</span>
-              </div>
-              <div className="bg-blue-500/5 border border-blue-500/10 p-3 rounded-2xl flex items-center gap-2">
-                <Smartphone className="w-4 h-4 text-blue-400" />
-                <span className="text-[10px] font-bold text-blue-400">تلفیق سنسور حرکتی</span>
-              </div>
-            </div>
             {isPoorSignal && (
               <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 p-4 rounded-3xl flex items-center gap-3 text-xs font-bold">
                 <AlertTriangle className="w-5 h-5 shrink-0" />
-                دقت برداشت پایین است ({bestReading.accuracy.toFixed(1)} متر). توصیه می‌شود مجدداً کالیبره کنید.
+                دقت برداشت پایین است ({ (bestReading || currentReading)?.accuracy.toFixed(1) } متر). توصیه می‌شود مجدداً کالیبره کنید.
               </div>
             )}
             <button 
-              onClick={() => onConfirm({
-                ...bestReading,
-                satellites,
-                confidence: spatialConfidence,
-                stability,
-                isSettled: settleProgress === 100
-              })}
-              disabled={isPoorSignal && readings.length < 5}
+              onClick={() => {
+                const finalReading = bestReading || currentReading;
+                if (finalReading) {
+                  onConfirm({
+                    ...finalReading,
+                    satellites,
+                    confidence: spatialConfidence,
+                    stability,
+                    isSettled: settleProgress === 100
+                  });
+                }
+              }}
               className={cn(
                 "w-full flex items-center justify-center gap-3 py-6 text-white rounded-[32px] font-black text-lg shadow-2xl transition-all active:scale-95 border-t border-white/20",
                 isPoorSignal ? "bg-amber-600 hover:bg-amber-500 shadow-amber-900/40" : "bg-emerald-600 hover:bg-emerald-500 shadow-emerald-900/40"
