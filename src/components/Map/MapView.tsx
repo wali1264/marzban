@@ -656,10 +656,14 @@ export default function MapView({
                       <div className="flex items-baseline gap-1">
                         <span className="text-base font-mono font-black text-slate-800">
                           {(() => {
-                            const integerPart = Math.floor(area);
-                            const decimalPart = Math.round((area - integerPart) * 100);
-                            if (decimalPart === 0) return integerPart.toLocaleString('fa-IR');
-                            return `${integerPart.toLocaleString('fa-IR')}/${decimalPart.toLocaleString('fa-IR')}`;
+                            const formattedArea = area.toFixed(2);
+                            const [int, dec] = formattedArea.split('.');
+                            const persianInt = parseInt(int).toLocaleString('fa-IR');
+                            const persianDec = parseInt(dec).toLocaleString('fa-IR');
+                            if (dec === '00') return persianInt;
+                            // Use padStart with Persian zero to ensure correct decimal representation (e.g., 100/05)
+                            const paddedDec = dec.startsWith('0') && dec !== '00' ? `۰${persianDec}` : persianDec;
+                            return `${persianInt}/${paddedDec}`;
                           })()}
                         </span>
                         <span className="text-[9px] text-slate-500 font-bold">م²</span>

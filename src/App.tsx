@@ -187,8 +187,24 @@ export default function App() {
         return p;
       });
 
-      // 2. Keep only those that were matched or are still valid
-      const stillValid = updatedParcels.filter(p => matchedCycleIds.has(p.pointIds.sort().join(',')));
+      // 2. Keep parcels if they are still valid cycles (points and connections exist)
+      // This preserves historical parent parcels even if they are no longer "minimal" cycles
+      const stillValid = updatedParcels.filter(p => {
+        // Check if all points still exist
+        const pPoints = p.pointIds.map(id => points.find(pt => pt.id === id)).filter(Boolean);
+        if (pPoints.length < 3) return false;
+
+        // Check if all connections still exist
+        for (let i = 0; i < p.pointIds.length; i++) {
+          const p1 = p.pointIds[i];
+          const p2 = p.pointIds[(i + 1) % p.pointIds.length];
+          const connExists = connections.some(c => 
+            (c.fromId === p1 && c.toId === p2) || (c.fromId === p2 && c.toId === p1)
+          );
+          if (!connExists) return false;
+        }
+        return true;
+      });
       
       // 3. Identify brand new cycles
       const newCycleIds = Array.from(cycleIds).filter(id => !matchedCycleIds.has(id));
