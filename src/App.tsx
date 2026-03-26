@@ -29,6 +29,7 @@ import {
   RotateCw,
   UserCog,
   Search,
+  Ruler,
   ChevronDown,
   SearchX,
   ChevronUp,
@@ -269,6 +270,10 @@ export default function App() {
   const [shareInputValue, setShareInputValue] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
   const [showResetMenu, setShowResetMenu] = useState(false);
+
+  // Ruler State
+  const [isRulerActive, setIsRulerActive] = useState(false);
+  const [rulerPoints, setRulerPoints] = useState<[number, number][]>([]);
 
   const getGenerationForParcel = (pointIds: string[], currentParcels: Parcel[]) => {
     const cycle = pointIds.map(id => points.find(p => p.id === id)!).filter(Boolean);
@@ -1302,7 +1307,11 @@ export default function App() {
           connections={connections}
           mode={mode}
           onPointClick={handlePointClick}
-          onMapClick={() => {
+          onMapClick={(lat, lng) => {
+            if (isRulerActive) {
+              setRulerPoints(prev => [...prev, [lat, lng]]);
+              return;
+            }
             setSelectedPointId(null);
             if (mode === 'TRACKING') setTrackingTargetId(null);
             if (isSearchActive && !searchQuery) setIsSearchActive(false);
@@ -1328,7 +1337,26 @@ export default function App() {
           generationFilter={generationFilter}
           highlightedParcelId={highlightedParcelId}
           onAngleChange={handleUpdateParcelAngle}
+          isRulerActive={isRulerActive}
+          rulerPoints={rulerPoints}
         />
+
+        {isRulerActive && (
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[1000] flex flex-col items-center gap-2">
+            <motion.button
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              onClick={() => setRulerPoints([])}
+              className="bg-rose-600 text-white px-6 py-2 rounded-full font-bold shadow-xl flex items-center gap-2 active:scale-95 transition-all"
+            >
+              <Trash2 className="w-4 h-4" />
+              پاک کردن متر
+            </motion.button>
+            <div className="bg-white/90 backdrop-blur px-4 py-2 rounded-2xl shadow-lg border border-amber-200 text-amber-800 text-xs font-bold">
+              حالت متراژ فعال: روی نقشه کلیک کنید تا نقاط متر را مشخص کنید.
+            </div>
+          </div>
+        )}
 
         {/* Floating Controls */}
         <div className="absolute top-4 right-4 flex flex-col gap-2 z-[1000]">
@@ -1401,6 +1429,25 @@ export default function App() {
             title="موقعیت من"
           >
             <Target className="w-6 h-6" />
+          </button>
+
+          <button 
+            onClick={() => {
+              const nextState = !isRulerActive;
+              setIsRulerActive(nextState);
+              if (!nextState) {
+                setRulerPoints([]);
+              }
+            }}
+            className={cn(
+              "p-3 rounded-2xl shadow-xl transition-all border-2",
+              isRulerActive 
+                ? "bg-amber-500 text-white border-amber-400" 
+                : "bg-white text-slate-600 border-white hover:border-slate-200"
+            )}
+            title="ابزار متر"
+          >
+            <Ruler className="w-6 h-6" />
           </button>
         </div>
 

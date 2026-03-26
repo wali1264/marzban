@@ -7,6 +7,8 @@ import { Point, Connection, AppMode, Parcel } from '../../types';
 import { cn, findCycles, calculatePolygonArea } from '../../utils';
 import { MapPin, Navigation, Target, Users } from 'lucide-react';
 
+import RulerTool from '../Tools/RulerTool';
+
 // Fix for default marker icons in Leaflet with React
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
@@ -39,6 +41,8 @@ interface MapViewProps {
   generationFilter?: number;
   highlightedParcelId?: string | null;
   onAngleChange?: (parcelId: string, angle: number) => void;
+  isRulerActive?: boolean;
+  rulerPoints?: [number, number][];
 }
 
 // Calculate geometric center of points
@@ -222,7 +226,9 @@ export default function MapView({
   parcels = [],
   generationFilter = 1,
   highlightedParcelId = null,
-  onAngleChange
+  onAngleChange,
+  isRulerActive,
+  rulerPoints
 }: MapViewProps) {
   
   const cycles = useMemo(() => findCycles(points, connections), [points, connections]);
@@ -765,7 +771,7 @@ export default function MapView({
           maxNativeZoom={19}
         />
         
-        <MapEvents onMapClick={() => onMapClick(0, 0)} onZoomEnd={setZoom} />
+        <MapEvents onMapClick={onMapClick} onZoomEnd={setZoom} />
         <MapController 
           centerOn={centerOn} 
           points={points}
@@ -774,6 +780,14 @@ export default function MapView({
           centerTrigger={centerTrigger}
         />
         
+        {isRulerActive && rulerPoints && (
+          <RulerTool 
+            points={rulerPoints} 
+            userLocation={userLocation} 
+            zoom={zoom} 
+          />
+        )}
+
         {/* Live User Location - Only shown if toggled ON */}
         {showUserLocation && userLocation && (
           <Marker 
