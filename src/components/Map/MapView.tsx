@@ -523,166 +523,157 @@ export default function MapView({
   }), []);
 
   const renderPolygons = () => {
-    // 1. Render historical parcels as a background layer
-    const historicalParcels = generationFilter > 0 
-      ? parcels.filter(p => p.generation === generationFilter)
-      : [];
-
+    // 1. Unified rendering logic for both historical parcels and active cycles
+    // This ensures filters work accurately by treating saved parcels of the current gen as primary
+    
     return (
       <React.Fragment>
-        {/* Background Layer: Confirmed Historical Parcels */}
-        {historicalParcels.map((p, idx) => {
-          const pPoints = p.pointIds.map(id => points.find(pt => pt.id === id)).filter((pt): pt is Point => !!pt);
-          if (pPoints.length < 3) return null;
-          
-          const coords = pPoints.map(pt => [pt.lng, pt.lat]);
-          const poly = turf.polygon([[...coords, coords[0]]]);
-          const area = turf.area(poly);
-          const centroid = turf.centroid(poly);
-          const [centerLng, centerLat] = centroid.geometry.coordinates;
+        {/* Layer 1: Saved Parcels (The "Truth" for each generation) */}
+        {parcels
+          .filter(p => {
+            if (generationFilter === 0) return !parcels.some(child => child.parentId === p.id); // Only leaf nodes in All mode
+            return p.generation === generationFilter; // Specific generation in Time Machine
+          })
+          .map(parcel => {
+            const parcelPoints = parcel.pointIds
+              .map(id => points.find(pt => pt.id === id))
+              .filter((pt): pt is Point => !!pt);
+            
+            if (parcelPoints.length < 3) return null;
 
-          return (
-            <React.Fragment key={`hist-${p.id}-${idx}`}>
-              <Polygon 
-                positions={pPoints.map(pt => [pt.lat, pt.lng])}
-                pathOptions={{
-                  color: '#94a3b8', // Slate 400
-                  fillColor: '#cbd5e1', // Slate 300
-                  fillOpacity: 0.05,
-                  weight: 1,
-                  dashArray: '5, 5'
-                }}
-                eventHandlers={{
-                  click: (e) => {
-                    if ((mode === 'DIVIDE' || mode === 'MANAGE' || mode === 'ROTATE' || mode === 'CONVERT') && onPolygonClick) {
-                      L.DomEvent.stopPropagation(e);
-                      onPolygonClick(pPoints);
+            const poly = turf.polygon([[...parcelPoints.map(p => [p.lng, p.lat]), [parcelPoints[0].lng, parcelPoints[0].lat]]]);
+            const area = parcel.area;
+            const isHighlighted = highlightedParcelId === parcel.id;
+            const isVisible = zoom > 16.5;
+            const scale = Math.max(0.6, Math.min(1, (zoom - 16) / 4));
+            const shouldShowDetails = !highlightedParcelId || highlightedParcelId === parcel.id;
+            const isLargeEnough = area > 5 || isHighlighted;
+
+            const centroid = turf.centroid(poly);
+            const [centerLng, centerLat] = centroid.geometry.coordinates;
+
+            return (
+              <React.Fragment key={`parcel-${parcel.id}`}>
+                <Polygon 
+                  positions={parcelPoints.map(p => [p.lat, p.lng])}
+                  pathOptions={{
+                    color: isHighlighted ? '#f59e0b' : (parcel.generation === 1 ? '#10b981' : parcel.generation === 2 ? '#6366f1' : '#f59e0b'),
+                    fillColor: isHighlighted ? '#f59e0b' : (parcel.generation === 1 ? '#10b981' : parcel.generation === 2 ? '#6366f1' : '#f59e0b'),
+                    fillOpacity: isHighlighted ? 0.3 : 0.2,
+                    weight: isHighlighted ? 4 : 3,
+                  }}
+                  eventHandlers={{
+                    click: (e) => {
+                      if ((mode === 'DIVIDE' || mode === 'MANAGE' || mode === 'ROTATE' || mode === 'CONVERT') && onPolygonClick) {
+                        L.DomEvent.stopPropagation(e);
+                        onPolygonClick(parcelPoints);
+                      }
                     }
-                  }
-                }}
-              />
-              {/* Area Card for Historical Parcel (if needed) */}
-              {zoom > 15 && (
+                  }}
+                />
                 <Marker position={[centerLat, centerLng]} icon={transparentIcon} interactive={false}>
-                  <Tooltip permanent direction="center" className="area-tooltip opacity-50">
-                    <div className="flex flex-col items-center bg-slate-100/80 px-1 py-0.5 rounded border border-slate-300">
-                      <span className="text-[8px] text-slate-500 font-bold">{p.name || 'قطعه مادر'}</span>
-                      <span className="text-[10px] font-mono text-slate-600">{Math.round(area).toLocaleString('fa-IR')} م²</span>
-                    </div>
-                  </Tooltip>
-                </Marker>
-              )}
-            </React.Fragment>
-          );
-        })}
-
-        {/* Foreground Layer: Current Geometric Cycles (Active Reality) */}
-        {[...cyclesWithGen]
-          .sort((a, b) => b.area - a.area)
-          .map((item, idx) => {
-          const { cycle, gen, poly, hasChildren, parcel } = item;
-          
-          // Visibility logic for the parcel itself
-          const isVisibleInCurrentFilter = generationFilter === 0 
-            ? !hasChildren // Unified view: show ONLY the top-most layer (leaf nodes)
-            : (gen === generationFilter || (gen === generationFilter + 1 && !parcel)); // Generation view: show current gen + active shares
-
-          if (!isVisibleInCurrentFilter) return null;
-
-          const area = calculatePolygonArea(cycle);
-
-          // Visibility logic for details based on zoom
-          const isVisible = zoom > 16.5; // Increased threshold for less clutter
-          const scale = Math.max(0.6, Math.min(1, (zoom - 16) / 4));
-
-          // If a parcel is highlighted, only show its details
-          const shouldShowDetails = !highlightedParcelId || highlightedParcelId === parcel?.id;
-          
-          // Area Card Visibility Logic:
-          // 1. In "All" mode (Unified Reality), only show the card for leaf nodes (most refined state).
-          // 2. In specific generation filters (Time Machine), show the card for parcels of THAT generation.
-          // 3. Show cards for active shares (next gen) ONLY when in DIVIDE mode to avoid clutter.
-          // 4. Don't show labels for extremely small slivers unless highlighted.
-          const isHighlighted = highlightedParcelId === parcel?.id;
-          const isDividing = mode === 'DIVIDE';
-          const isLargeEnough = area > 5 || isHighlighted;
-          
-          const showAreaCard = isVisible && shouldShowDetails && isLargeEnough &&
-            (
-              (generationFilter === 0 && !hasChildren) || // All mode: only leaf nodes
-              (generationFilter > 0 && gen === generationFilter) || // Time Machine: current gen parcels
-              (generationFilter > 0 && gen === generationFilter + 1 && !parcel && isDividing) // Time Machine: next gen shares (only when dividing)
-            );
-          
-          // Calculate centroid for precise positioning
-          const centroid = turf.centroid(poly);
-          const [centerLng, centerLat] = centroid.geometry.coordinates;
-
-          return (
-            <React.Fragment key={`cycle-group-${idx}`}>
-              <Polygon 
-                positions={cycle.map(p => [p.lat, p.lng])}
-                pathOptions={{
-                  color: isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b'),
-                  fillColor: isHighlighted ? '#f59e0b' : (gen === 1 ? '#10b981' : gen === 2 ? '#6366f1' : '#f59e0b'),
-                  fillOpacity: isHighlighted ? 0.3 : 0.1,
-                  weight: isHighlighted ? 4 : 2,
-                  dashArray: isHighlighted ? '10, 10' : undefined
-                }}
-                eventHandlers={{
-                  click: (e) => {
-                    if ((mode === 'DIVIDE' || mode === 'MANAGE' || mode === 'ROTATE' || mode === 'CONVERT') && onPolygonClick) {
-                      L.DomEvent.stopPropagation(e);
-                      onPolygonClick(cycle);
-                    }
-                  }
-                }}
-              />
-
-              {/* Centered Marker for Area Card */}
-              <Marker 
-                position={[centerLat, centerLng]} 
-                icon={transparentIcon}
-                interactive={false}
-              >
-                {showAreaCard && (
-                  <Tooltip permanent direction="center" className="area-tooltip">
-                    <div 
-                      className="relative z-10 flex flex-col items-center bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200 shadow-lg transition-all duration-300 pointer-events-none min-w-[80px]" 
-                      dir="rtl"
-                      style={{ transform: `scale(${scale})`, opacity: isVisible ? 1 : 0 }}
-                    >
-                      <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">مساحت</span>
-                      <div className="flex items-baseline gap-1">
-                        <span className="text-base font-mono font-black text-slate-800">
-                          {(() => {
-                            const formattedArea = area.toFixed(2);
-                            const [int, dec] = formattedArea.split('.');
-                            const persianInt = parseInt(int).toLocaleString('fa-IR');
-                            const persianDec = parseInt(dec).toLocaleString('fa-IR');
-                            if (dec === '00') return persianInt;
-                            // Use padStart with Persian zero to ensure correct decimal representation (e.g., 100/05)
-                            const paddedDec = dec.startsWith('0') && dec !== '00' ? `۰${persianDec}` : persianDec;
-                            return `${persianInt}/${paddedDec}`;
-                          })()}
-                        </span>
-                        <span className="text-[9px] text-slate-500 font-bold">م²</span>
-                      </div>
-                      {parcel && (
-                        <div className="flex items-center gap-1.5 border-t border-slate-100 mt-1 pt-1 w-full justify-center">
-                          <span className="text-[8px] text-slate-400 font-medium">نسل {gen}</span>
-                          {parcel.isConverted && (
-                            <span className="text-[8px] text-amber-500 font-bold">تفكیک شده</span>
-                          )}
+                  {isVisible && shouldShowDetails && isLargeEnough && (
+                    <Tooltip permanent direction="center" className="area-tooltip">
+                      <div className="flex flex-col items-center pointer-events-none">
+                        {parcel.ownerName && (
+                          <div 
+                            className="owner-watermark-text mb-4"
+                            style={{ 
+                              fontSize: `${Math.max(16, Math.min(56, area / 12))}px`,
+                              transform: `rotate(-25deg) scale(${scale})`,
+                            }}
+                          >
+                            {parcel.ownerName}
+                          </div>
+                        )}
+                        <div 
+                          className="relative z-10 flex flex-col items-center bg-white/95 backdrop-blur-md px-3 py-2 rounded-xl border border-slate-200 shadow-2xl transition-all duration-300 min-w-[100px]" 
+                          dir="rtl"
+                          style={{ transform: `scale(${scale})` }}
+                        >
+                          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">مساحت قطعه</span>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-lg font-mono font-black text-slate-900">
+                              {(() => {
+                                const formattedArea = area.toFixed(2);
+                                const [int, dec] = formattedArea.split('.');
+                                const persianInt = parseInt(int).toLocaleString('fa-IR');
+                                const persianDec = parseInt(dec).toLocaleString('fa-IR');
+                                if (dec === '00') return persianInt;
+                                const paddedDec = dec.startsWith('0') && dec !== '00' ? `۰${persianDec}` : persianDec;
+                                return `${persianInt}/${paddedDec}`;
+                              })()}
+                            </span>
+                            <span className="text-[11px] text-slate-500 font-bold">م²</span>
+                          </div>
+                          <div className="flex flex-col items-center gap-1 border-t border-slate-100 mt-2 pt-2 w-full">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full font-bold">نسل {parcel.generation}</span>
+                              {parcel.ownerName && (
+                                <span className="text-[11px] text-blue-700 font-black truncate max-w-[90px]">{parcel.ownerName}</span>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  </Tooltip>
-                )}
-              </Marker>
-              {!parcel?.isConverted && parcel?.divisions.map(div => {
+                      </div>
+                    </Tooltip>
+                  )}
+                </Marker>
+              </React.Fragment>
+            );
+          })}
+
+        {/* Layer 2: Active Geometric Cycles (Future shares / Unsaved work) */}
+        {generationFilter > 0 && mode === 'DIVIDE' && cyclesWithGen
+          .filter(item => !item.parcel && item.gen === generationFilter + 1)
+          .map((item, idx) => {
+            const { cycle, poly } = item;
+            const area = calculatePolygonArea(cycle);
+            const centroid = turf.centroid(poly);
+            const [centerLng, centerLat] = centroid.geometry.coordinates;
+            const scale = Math.max(0.6, Math.min(1, (zoom - 16) / 4));
+
+            return (
+              <React.Fragment key={`active-cycle-${idx}`}>
+                <Polygon 
+                  positions={cycle.map(p => [p.lat, p.lng])}
+                  pathOptions={{
+                    color: '#f59e0b',
+                    fillColor: '#f59e0b',
+                    fillOpacity: 0.1,
+                    weight: 2,
+                    dashArray: '5, 5'
+                  }}
+                />
+                <Marker position={[centerLat, centerLng]} icon={transparentIcon} interactive={false}>
+                  {zoom > 16.5 && (
+                    <Tooltip permanent direction="center" className="area-tooltip">
+                      <div 
+                        className="bg-amber-50/90 border border-amber-200 px-2 py-1 rounded-lg shadow-md flex flex-col items-center"
+                        style={{ transform: `scale(${scale})` }}
+                      >
+                        <span className="text-[8px] text-amber-600 font-bold">سهم جدید</span>
+                        <span className="text-xs font-mono font-bold text-amber-900">
+                          {Math.round(area).toLocaleString('fa-IR')} م²
+                        </span>
+                      </div>
+                    </Tooltip>
+                  )}
+                </Marker>
+              </React.Fragment>
+            );
+          })}
+
+        {/* Layer 3: Divisions (For CONVERT mode) */}
+        {parcels
+          .filter(p => {
+            if (generationFilter === 0) return !parcels.some(child => child.parentId === p.id);
+            return p.generation === generationFilter;
+          })
+          .map(parcel => (
+            <React.Fragment key={`divisions-${parcel.id}`}>
+              {!parcel.isConverted && parcel.divisions.map(div => {
                 const center = getMultiCentroid(div.geometry);
-                
                 return (
                   <React.Fragment key={div.id}>
                     {div.geometry.map((polyCoords, pIdx) => (
@@ -698,18 +689,18 @@ export default function MapView({
                         }}
                         eventHandlers={{
                           click: (e) => {
-                            if (mode === 'CONVERT' && onDivisionClick && parcel) {
+                            if (mode === 'CONVERT' && onDivisionClick) {
                               L.DomEvent.stopPropagation(e);
                               onDivisionClick(parcel.id, div.id);
                             }
                           },
-                          mousedown: () => handleLongPressStart(() => parcel && onDivisionLongPress?.(parcel.id, div.id)),
+                          mousedown: () => handleLongPressStart(() => onDivisionLongPress?.(parcel.id, div.id)),
                           mouseup: handleLongPressEnd,
-                          touchstart: () => handleLongPressStart(() => parcel && onDivisionLongPress?.(parcel.id, div.id)),
+                          touchstart: () => handleLongPressStart(() => onDivisionLongPress?.(parcel.id, div.id)),
                           touchend: handleLongPressEnd,
                           contextmenu: (e) => {
                             L.DomEvent.stopPropagation(e);
-                            parcel && onDivisionLongPress?.(parcel.id, div.id);
+                            onDivisionLongPress?.(parcel.id, div.id);
                           }
                         }}
                       />
@@ -725,8 +716,7 @@ export default function MapView({
                 );
               })}
             </React.Fragment>
-          );
-        })}
+          ))}
       </React.Fragment>
     );
   };
