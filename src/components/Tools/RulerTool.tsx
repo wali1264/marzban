@@ -1,158 +1,168 @@
-import React, { useMemo } from 'react';
-import { Polyline, Marker, Tooltip, useMap } from 'react-leaflet';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Polyline, Marker, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import * as turf from '@turf/turf';
-import { motion, AnimatePresence } from 'motion/react';
+import { Point } from '../../types';
 
 interface RulerToolProps {
-  points: [number, number][]; // [lat, lng]
+  startPoint?: Point;
+  endPoint?: Point;
   userLocation?: { lat: number; lng: number };
-  zoom: number;
 }
 
-export default function RulerTool({ points, userLocation, zoom }: RulerToolProps) {
-  const map = useMap();
+export default function RulerTool({ startPoint, endPoint, userLocation }: RulerToolProps) {
+  const [handleProgress, setHandleProgress] = useState(1.0); // 0 to 1
+  
+  // Reset handle to end when points change
+  useEffect(() => {
+    setHandleProgress(1.0);
+  }, [startPoint?.id, endPoint?.id]);
 
   const rulerData = useMemo(() => {
-    if (points.length < 2) return null;
+    if (!startPoint || !endPoint) return null;
 
-    const line = turf.lineString(points.map(p => [p[1], p[0]]));
+    const line = turf.lineString([
+      [startPoint.lng, startPoint.lat],
+      [endPoint.lng, endPoint.lat]
+    ]);
     const totalDistance = turf.length(line, { units: 'meters' });
-
-    // Determine tick interval based on zoom
-    // Zoom 13: 1km
-    // Zoom 15: 100m
-    // Zoom 18: 1m
-    // Zoom 20+: 10cm
-    let interval = 1000; // default 1km
-    if (zoom >= 20) interval = 0.1;
-    else if (zoom >= 18) interval = 1;
-    else if (zoom >= 15) interval = 100;
-    else if (zoom >= 13) interval = 1000;
-    else interval = 5000;
-
-    const ticks: { pos: [number, number]; distance: number; label: string; type: 'major' | 'minor' }[] = [];
     
-    // Generate ticks along the line
-    for (let d = 0; d <= totalDistance; d += interval) {
-      try {
-        const point = turf.along(line, d, { units: 'meters' });
-        const [lng, lat] = point.geometry.coordinates;
-        
-        let label = '';
-        if (d >= 1000) label = `${(d / 1000).toFixed(d % 1000 === 0 ? 0 : 1)}km`;
-        else if (d >= 1) label = `${Math.floor(d)}m`;
-        else label = `${(d * 100).toFixed(0)}cm`;
+    // Calculate handle position
+    const handlePos = turf.along(line, totalDistance * handleProgress, { units: 'meters' });
+    const [hLng, hLat] = handlePos.geometry.coordinates;
+    const currentDistance = totalDistance * handleProgress;
 
-        ticks.push({
-          pos: [lat, lng],
-          distance: d,
-          label,
-          type: d % (interval * 5) === 0 ? 'major' : 'minor'
-        });
-      } catch (e) {
-        // Skip if along fails at the very end
-      }
+    return { 
+      totalDistance, 
+      currentDistance,
+      handlePos: [hLat, hLng] as [number, number],
+      startPos: [startPoint.lat, startPoint.lng] as [number, number],
+      endPos: [endPoint.lat, endPoint.lng] as [number, number]
+    };
+  }, [startPoint, endPoint, handleProgress]);
+
+  if (!rulerData) {
+    // If only start point is selected, show a highlight on it
+    if (startPoint) {
+      return (
+        <Marker 
+          position={[startPoint.lat, startPoint.lng]} 
+          icon={L.divIcon({
+            className: 'ruler-start-highlight',
+            html: `
+              <div class="relative flex items-center justify-center">
+                <div class="absolute w-12 h-12 bg-amber-500/20 rounded-full animate-ping"></div>
+                <div class="w-6 h-6 bg-amber-500 rounded-full border-4 border-white shadow-xl"></div>
+              </div>
+            `,
+            iconSize: [48, 48],
+            iconAnchor: [24, 24]
+          })}
+        />
+      );
     }
-
-    // User projection on line
-    let userProj = null;
-    if (userLocation) {
-      const userPt = turf.point([userLocation.lng, userLocation.lat]);
-      const snapped = turf.nearestPointOnLine(line, userPt, { units: 'meters' });
-      const distOnLine = snapped.properties.location || 0;
-      userProj = {
-        pos: [snapped.geometry.coordinates[1], snapped.geometry.coordinates[0]] as [number, number],
-        distance: distOnLine
-      };
-    }
-
-    return { totalDistance, ticks, userProj };
-  }, [points, userLocation, zoom]);
-
-  if (!rulerData) return null;
+    return null;
+  }
 
   return (
     <>
-      {/* The Main Tape Line */}
+      {/* The Main Line */}
       <Polyline
-        positions={points}
+        positions={[rulerData.startPos, rulerData.endPos]}
         pathOptions={{
           color: '#f59e0b',
-          weight: 12,
+          weight: 8,
           opacity: 0.4,
-          lineCap: 'butt'
+          lineCap: 'round'
         }}
       />
       <Polyline
-        positions={points}
+        positions={[rulerData.startPos, rulerData.endPos]}
         pathOptions={{
           color: '#fbbf24',
           weight: 2,
           opacity: 0.8,
-          dashArray: '1, 10'
+          dashArray: '5, 10'
         }}
       />
 
-      {/* Ticks and Labels */}
-      {rulerData.ticks.map((tick, i) => (
-        <Marker
-          key={i}
-          position={tick.pos}
-          icon={L.divIcon({
-            className: 'ruler-tick',
-            html: `
-              <div class="flex flex-col items-center" style="transform: translate(-50%, -50%)">
-                <div class="${tick.type === 'major' ? 'h-4 w-0.5' : 'h-2 w-px'} bg-amber-500"></div>
-                ${tick.type === 'major' ? `<span class="text-[8px] font-black text-amber-700 bg-white/80 px-1 rounded mt-1">${tick.label}</span>` : ''}
-              </div>
-            `,
-            iconSize: [0, 0]
-          })}
-        />
-      ))}
+      {/* Start Marker */}
+      <Marker 
+        position={rulerData.startPos} 
+        icon={L.divIcon({
+          className: 'ruler-cap',
+          html: '<div class="w-5 h-5 bg-amber-600 rounded-full border-4 border-white shadow-lg"></div>',
+          iconSize: [20, 20],
+          iconAnchor: [10, 10]
+        })} 
+      />
+      
+      {/* End Marker */}
+      <Marker 
+        position={rulerData.endPos} 
+        icon={L.divIcon({
+          className: 'ruler-cap',
+          html: '<div class="w-5 h-5 bg-slate-400 rounded-full border-4 border-white shadow-lg"></div>',
+          iconSize: [20, 20],
+          iconAnchor: [10, 10]
+        })} 
+      />
 
-      {/* User Position on Ruler */}
-      {rulerData.userProj && (
-        <Marker
-          position={rulerData.userProj.pos}
-          icon={L.divIcon({
-            className: 'ruler-user-pos',
-            html: `
-              <div class="relative flex flex-col items-center">
-                <div class="w-4 h-4 bg-blue-600 rounded-full border-2 border-white shadow-lg animate-pulse"></div>
-                <div class="absolute top-5 bg-blue-600 text-white text-[8px] font-black px-2 py-0.5 rounded-full whitespace-nowrap shadow-xl">
-                  متر ${Math.floor(rulerData.userProj.distance)}
+      {/* Draggable Handle / Card */}
+      <Marker
+        position={rulerData.handlePos}
+        draggable={true}
+        eventHandlers={{
+          drag: (e) => {
+            const marker = e.target;
+            const pos = marker.getLatLng();
+            
+            // Project current drag position onto the line to find nearest point
+            const line = turf.lineString([
+              [startPoint!.lng, startPoint!.lat],
+              [endPoint!.lng, endPoint!.lat]
+            ]);
+            const pt = turf.point([pos.lng, pos.lat]);
+            const snapped = turf.nearestPointOnLine(line, pt, { units: 'meters' });
+            
+            // Calculate progress along line
+            const totalDist = turf.length(line, { units: 'meters' });
+            const distFromStart = turf.distance(
+              turf.point([startPoint!.lng, startPoint!.lat]),
+              snapped,
+              { units: 'meters' }
+            );
+            
+            setHandleProgress(Math.min(1, Math.max(0, distFromStart / totalDist)));
+          }
+        }}
+        icon={L.divIcon({
+          className: 'ruler-handle',
+          html: `
+            <div class="relative flex flex-col items-center" style="transform: translateY(-50%)">
+              <div class="bg-white px-5 py-3 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.2)] border-2 border-amber-500 flex flex-col items-center min-w-[120px] active:scale-105 transition-transform cursor-grab active:cursor-grabbing">
+                <div class="flex items-center gap-2 mb-1">
+                  <div class="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse"></div>
+                  <span class="text-[10px] text-slate-400 font-black uppercase tracking-[0.2em]">فاصله دیجیتال</span>
+                </div>
+                <div class="flex items-baseline gap-1">
+                  <span class="text-2xl font-black text-slate-800 tabular-nums">${rulerData.currentDistance.toFixed(1)}</span>
+                  <span class="text-xs font-bold text-amber-600">متر</span>
+                </div>
+                <div class="w-12 h-1.5 bg-slate-100 rounded-full mt-2 overflow-hidden">
+                  <div class="h-full bg-amber-500 transition-all duration-75" style="width: ${handleProgress * 100}%"></div>
                 </div>
               </div>
-            `,
-            iconSize: [16, 16],
-            iconAnchor: [8, 8]
-          })}
-        />
-      )}
-
-      {/* Start and End Markers */}
-      <Marker position={points[0]} icon={L.divIcon({
-        className: 'ruler-cap',
-        html: '<div class="w-3 h-3 bg-amber-600 rounded-full border-2 border-white"></div>',
-        iconSize: [12, 12],
-        iconAnchor: [6, 6]
-      })} />
-      
-      <Marker position={points[points.length - 1]} icon={L.divIcon({
-        className: 'ruler-cap',
-        html: `
-          <div class="relative flex flex-col items-center">
-            <div class="w-4 h-4 bg-amber-600 rounded-full border-2 border-white shadow-lg"></div>
-            <div class="absolute bottom-6 bg-slate-900 text-white text-[10px] font-black px-3 py-1 rounded-xl whitespace-nowrap shadow-2xl border border-white/10">
-              کل: ${rulerData.totalDistance.toFixed(1)} متر
+              <div class="w-0.5 h-8 bg-amber-500 shadow-sm"></div>
+              <div class="w-6 h-6 bg-amber-500 rounded-full border-4 border-white shadow-xl flex items-center justify-center">
+                <div class="w-1.5 h-1.5 bg-white rounded-full"></div>
+              </div>
             </div>
-          </div>
-        `,
-        iconSize: [16, 16],
-        iconAnchor: [8, 8]
-      })} />
+          `,
+          iconSize: [140, 100],
+          iconAnchor: [70, 90]
+        })}
+      />
     </>
   );
 }

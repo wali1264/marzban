@@ -274,6 +274,8 @@ export default function App() {
   // Ruler State
   const [isRulerActive, setIsRulerActive] = useState(false);
   const [rulerPoints, setRulerPoints] = useState<[number, number][]>([]);
+  const [rulerStartPointId, setRulerStartPointId] = useState<string | null>(null);
+  const [rulerEndPointId, setRulerEndPointId] = useState<string | null>(null);
 
   const getGenerationForParcel = (pointIds: string[], currentParcels: Parcel[]) => {
     const cycle = pointIds.map(id => points.find(p => p.id === id)!).filter(Boolean);
@@ -618,6 +620,17 @@ export default function App() {
   }, [parcels.length]);
 
   const handlePointClick = (point: Point) => {
+    if (isRulerActive) {
+      if (!rulerStartPointId) {
+        setRulerStartPointId(point.id);
+      } else if (rulerStartPointId === point.id) {
+        setRulerStartPointId(null);
+        setRulerEndPointId(null);
+      } else {
+        setRulerEndPointId(point.id);
+      }
+      return;
+    }
     if (mode === 'TRACKING') {
       setTrackingTargetId(point.id);
       setSelectedPointId(point.id);
@@ -1339,24 +1352,9 @@ export default function App() {
           onAngleChange={handleUpdateParcelAngle}
           isRulerActive={isRulerActive}
           rulerPoints={rulerPoints}
+          rulerStartPointId={rulerStartPointId}
+          rulerEndPointId={rulerEndPointId}
         />
-
-        {isRulerActive && (
-          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[1000] flex flex-col items-center gap-2">
-            <motion.button
-              initial={{ y: 20, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              onClick={() => setRulerPoints([])}
-              className="bg-rose-600 text-white px-6 py-2 rounded-full font-bold shadow-xl flex items-center gap-2 active:scale-95 transition-all"
-            >
-              <Trash2 className="w-4 h-4" />
-              پاک کردن متر
-            </motion.button>
-            <div className="bg-white/90 backdrop-blur px-4 py-2 rounded-2xl shadow-lg border border-amber-200 text-amber-800 text-xs font-bold">
-              حالت متراژ فعال: روی نقشه کلیک کنید تا نقاط متر را مشخص کنید.
-            </div>
-          </div>
-        )}
 
         {/* Floating Controls */}
         <div className="absolute top-4 right-4 flex flex-col gap-2 z-[1000]">
@@ -1437,6 +1435,8 @@ export default function App() {
               setIsRulerActive(nextState);
               if (!nextState) {
                 setRulerPoints([]);
+                setRulerStartPointId(null);
+                setRulerEndPointId(null);
               }
             }}
             className={cn(

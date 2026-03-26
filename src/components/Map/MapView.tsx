@@ -43,6 +43,8 @@ interface MapViewProps {
   onAngleChange?: (parcelId: string, angle: number) => void;
   isRulerActive?: boolean;
   rulerPoints?: [number, number][];
+  rulerStartPointId?: string | null;
+  rulerEndPointId?: string | null;
 }
 
 // Calculate geometric center of points
@@ -228,7 +230,9 @@ export default function MapView({
   highlightedParcelId = null,
   onAngleChange,
   isRulerActive,
-  rulerPoints
+  rulerPoints,
+  rulerStartPointId,
+  rulerEndPointId
 }: MapViewProps) {
   
   const cycles = useMemo(() => findCycles(points, connections), [points, connections]);
@@ -780,11 +784,11 @@ export default function MapView({
           centerTrigger={centerTrigger}
         />
         
-        {isRulerActive && rulerPoints && (
+        {isRulerActive && (
           <RulerTool 
-            points={rulerPoints} 
+            startPoint={points.find(p => p.id === rulerStartPointId)}
+            endPoint={points.find(p => p.id === rulerEndPointId)}
             userLocation={userLocation} 
-            zoom={zoom} 
           />
         )}
 
